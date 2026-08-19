@@ -79,24 +79,17 @@ async def create_payout_ticket(
         if not vote:
             return False, "Tasdiqlangan ovoz ma'lumoti topilmadi.", None
 
-        if vote.status != VoteStatus.VERIFIED:
-            return False, "Ushbu ovoz hali OpenBudget tomonidan tasdiqlanmagan!", None
-
         ticket_stmt = select(PayoutTicket).where(PayoutTicket.vote_id == vote_id)
         t_res = await session.execute(ticket_stmt)
         existing_ticket = t_res.scalar_one_or_none()
         if existing_ticket:
             return False, f"Ushbu ovoz bo'yicha tayyor zayavka mavjud (#{existing_ticket.ticket_code}).", existing_ticket
 
-    # 2. Check balance if withdrawing accumulated balance
-    if not vote_id and user_obj.balance_uzs < reward_amount:
-        return False, f"Balansingizda yetarli mablag' mavjud emas. Hozirgi balansingiz: {user_obj.balance_uzs:,} UZS", None
-
-    # 3. Anti-Fraud Evaluation
+    # 2. Anti-Fraud Evaluation
     is_high_risk, risk_reason = await evaluate_fraud_risk(session, telegram_id, clean_dest)
     ticket_initial_status = TicketStatus.HIGH_RISK if is_high_risk else TicketStatus.PENDING
 
-    # 4. Create Ticket
+    # 3. Create Ticket
     code = generate_ticket_code()
     clean_holder = card_holder_name.strip() if card_holder_name else None
 
@@ -115,15 +108,11 @@ async def create_payout_ticket(
     )
     session.add(new_ticket)
 
-    # 5. Deduct/Reserve from User Balance if user has accumulated balance
-    if user_obj.balance_uzs >= reward_amount:
-        user_obj.balance_uzs -= reward_amount
-
-    # 6. Update Reserved System Budget
+    # 4. Update Reserved System Budget
     budget = await get_or_create_budget(session)
     budget.total_reserved_uzs += reward_amount
 
-    # 7. Audit Log
+    # 5. Audit Log
     audit = AuditLog(
         event_type="TICKET_CREATED",
         telegram_id=telegram_id,
@@ -134,7 +123,7 @@ async def create_payout_ticket(
     await session.commit()
     logger.info(f"Successfully created ticket {code} for user {telegram_id} on {bot_identifier}")
 
-    # 8. Instant Admin Notification Card Dispatch
+    # 6. Instant Admin Notification Card Dispatch
     if bot:
         try:
             raw_name = user_obj.full_name if user_obj.full_name else "Foydalanuvchi"
@@ -225,6 +214,29 @@ async def process_ticket_action(
         ticket.processed_by_admin_id = admin_telegram_id
         ticket.updated_at = datetime.utcnow()
 
+        # Referral Bonus Payout to inviter upon vote verification
+        if settings.REFERRAL_BONUS_PER_VOTE > 0:
+            user_stmt = select(User).where(User.telegram_id == ticket.telegram_id)
+            u_res = await session.execute(user_stmt)
+            user_obj = u_res.scalar_one_or_none()
+            if user_obj and user_obj.referrer_id:
+                ref_stmt = select(User).where(User.telegram_id == user_obj.referrer_id)
+                r_res = await session.execute(ref_stmt)
+                referrer_obj = r_res.scalar_one_or_none()
+                if referrer_obj:
+                    referrer_obj.balance_uzs += settings.REFERRAL_BONUS_PER_VOTE
+                    if bot:
+                        try:
+                            ref_msg = (
+                                f"{emoji_manager.get('welcome')} <b>REFERAL BONUSI KELDI!</b>\n\n"
+                                f"Siz taklif qilgan do'stingizning ovozi tasdiqlandi va to'landi!\n"
+                                f"{emoji_manager.get('balance')} Balansingizga: <b>+{settings.REFERRAL_BONUS_PER_VOTE:,} UZS</b> qo'shildi!\n"
+                                f"{emoji_manager.get('lock_icon')} Jami balansingiz: <b>{referrer_obj.balance_uzs:,} UZS</b>"
+                            )
+                            await bot.send_message(chat_id=referrer_obj.telegram_id, text=ref_msg, parse_mode="HTML")
+                        except Exception as ref_ex:
+                            logger.error(f"Failed to notify referrer {referrer_obj.telegram_id}: {ref_ex}")
+
         if bot:
             try:
                 user_msg = (
@@ -274,13 +286,6 @@ async def process_ticket_action(
             return False, "Zayavka allaqachon rad etilgan!"
 
         budget.total_reserved_uzs = max(0, budget.total_reserved_uzs - ticket.amount_uzs)
-        
-        # Refund user's balance on rejection
-        user_stmt = select(User).where(User.telegram_id == ticket.telegram_id)
-        u_res = await session.execute(user_stmt)
-        user_obj = u_res.scalar_one_or_none()
-        if user_obj:
-            user_obj.balance_uzs += ticket.amount_uzs
 
         ticket.status = TicketStatus.REJECTED
         ticket.processed_by_admin_id = admin_telegram_id
@@ -293,7 +298,6 @@ async def process_ticket_action(
                 reject_msg = (
                     f"{emoji_manager.get('danger')} <b>ZAYAVKA RAD ETILDI</b>\n\n"
                     f"{emoji_manager.get('tickets_icon')} Zayavka kodi: <code>#{ticket.ticket_code}</code>\n"
-                    f"{emoji_manager.get('balance')} Summa ({ticket.amount_uzs:,} UZS) balansingizga qaytarildi!\n"
                     f"{emoji_manager.get('danger')} <b>Rad etilish sababi:</b> {safe_reason}\n\n"
                     f"Agarda e'tirozingiz bo'lsa, admin bilan bog'lanishingiz mumkin."
                 )

@@ -44,7 +44,7 @@ def get_help_contacts_keyboard() -> InlineKeyboardMarkup:
         ]
     )
 
-def get_payout_choice_keyboard(vote_id: int) -> InlineKeyboardMarkup:
+def get_payout_choice_keyboard(vote_id: int = None) -> InlineKeyboardMarkup:
     """Returns payout destination selection inline keyboard."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -53,7 +53,7 @@ def get_payout_choice_keyboard(vote_id: int) -> InlineKeyboardMarkup:
                     text="Plastik Karta (Uzcard / Humo)",
                     key="balance",
                     style="primary",
-                    callback_data=f"payout_type:card:{vote_id}"
+                    callback_data=f"payout_type:card:{vote_id or 0}"
                 )
             ],
             [
@@ -61,7 +61,7 @@ def get_payout_choice_keyboard(vote_id: int) -> InlineKeyboardMarkup:
                     text="Telefon Raqam (Paynet / Click)",
                     key="other_phone",
                     style="success",
-                    callback_data=f"payout_type:phone:{vote_id}"
+                    callback_data=f"payout_type:phone:{vote_id or 0}"
                 )
             ]
         ]
@@ -198,33 +198,39 @@ def get_admin_dashboard_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 make_inline_btn(
+                    text="Referal Bonusi",
+                    key="balance",
+                    style="success",
+                    callback_data="admin_menu:change_ref_bonus"
+                ),
+                make_inline_btn(
                     text="Premium Emojilar",
                     key="welcome",
                     style="success",
                     callback_data="admin_menu:emojis"
-                ),
-                make_inline_btn(
-                    text="Top Referrallar",
-                    key="top_ref",
-                    style="success",
-                    callback_data="admin_menu:top_ref"
                 )
             ],
             [
+                make_inline_btn(
+                    text="Top Referrallar",
+                    key="top_ref",
+                    style="primary",
+                    callback_data="admin_menu:top_ref"
+                ),
                 make_inline_btn(
                     text="Faol Guruhlar",
                     key="groups_icon",
                     style="primary",
                     callback_data="admin_menu:groups"
-                ),
+                )
+            ],
+            [
                 make_inline_btn(
                     text="Guruhlarga Reklama",
                     key="speaker",
                     style="success",
                     callback_data="admin_menu:broadcast"
-                )
-            ],
-            [
+                ),
                 make_inline_btn(
                     text="Yangilash",
                     key="system_icon",

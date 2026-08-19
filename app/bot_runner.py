@@ -9,8 +9,8 @@ from redis.asyncio import Redis
 from app.config import settings
 from app.database.session import init_db, AsyncSessionLocal
 from app.services.emoji_manager import emoji_manager
+from app.bot.middlewares.anti_flood import AntiFloodMiddleware
 from app.bot.handlers import start, vote, payout, admin, group
-from app.bot.handlers.group import broadcast_daily_countdown
 
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
@@ -41,6 +41,11 @@ async def main():
     bot_info = await bot.get_me()
     bot_identifier = "bot2" if (bot_info.id == 8913170688 or "8913170688" in settings.BOT_TOKEN) else "bot1"
     logger.info(f"Bot identified as: {bot_identifier.upper()} (@{bot_info.username})")
+
+    # Anti-Flood Middleware Registration
+    anti_flood = AntiFloodMiddleware(rate_limit_seconds=0.8)
+    dp.message.middleware(anti_flood)
+    dp.callback_query.middleware(anti_flood)
 
     class DbSessionMiddleware:
         def __init__(self, session_factory, redis_conn=None, bot_id="bot1"):

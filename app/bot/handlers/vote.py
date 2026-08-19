@@ -1,17 +1,18 @@
 import logging
+import html
 from aiogram import Router, F
-from aiogram.types import Message, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from redis.asyncio import Redis
 
-from app.database.models import Vote, VoteStatus, User
-from app.bot.states import VoteStates
+from app.database.models import Vote, VoteStatus, User, PayoutTicket, TicketStatus, PayoutType
+from app.bot.states import VoteStates, PayoutStates
 from app.bot.keyboards.reply import get_phone_request_keyboard, get_main_menu_keyboard, get_cancel_keyboard
 from app.bot.keyboards.inline import get_payout_choice_keyboard
-from app.services.openbudget_api import openbudget_api
-from app.services.anti_fraud import clean_phone_number, is_valid_uzbek_phone
+from app.services.anti_fraud import clean_phone_number, is_valid_uzbek_phone, is_valid_card_number
+from app.services.payout_service import create_payout_ticket
 from app.services.emoji_manager import emoji_manager
 from app.config import settings
 
@@ -21,6 +22,20 @@ router = Router()
 def check_is_admin(user_id: int) -> bool:
     return user_id in settings.admin_id_list
 
+def get_openbudget_site_keyboard() -> InlineKeyboardMarkup:
+    """Returns inline keyboard linking to official OpenBudget voting portal."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🌐 OpenBudget Saytiga O'tish",
+                    style="success",
+                    url="https://openbudget.uz/board-initiatives"
+                )
+            ]
+        ]
+    )
+
 @router.message(F.text.contains("Bekor qilish"))
 async def cancel_handler(message: Message, state: FSMContext):
     is_adm = check_is_admin(message.from_user.id)
@@ -29,98 +44,57 @@ async def cancel_handler(message: Message, state: FSMContext):
     await message.answer(cancel_text, reply_markup=get_main_menu_keyboard(is_admin=is_adm), parse_mode="HTML")
 
 @router.message(F.text.contains("Ovoz berish"), F.chat.type == "private")
-async def start_self_vote_process(message: Message, state: FSMContext, session: AsyncSession, redis: Redis):
-    user_id = message.from_user.id
-
-    if not check_is_admin(user_id):
-        from app.services.countdown import get_countdown_info
-        c_str, c_html, is_started = get_countdown_info()
-        await message.answer(
-            c_html,
-            parse_mode="HTML"
-        )
-        return
-
-    await state.clear()
-    await state.set_state(VoteStates.waiting_for_phone)
-
-    text = (
-        f"{emoji_manager.get('vote')} <b>OpenBudget loyihasiga o'z raqamingizdan ovoz berish:</b>\n\n"
-        "Ovoz berish uchun pastdagi <b>📱 Telefon raqamni yuborish</b> tugmasini bosing:"
-    )
-    await message.answer(text, reply_markup=get_phone_request_keyboard(), parse_mode="HTML")
-
 @router.message(F.text.contains("Boshqa raqamdan ovoz"), F.chat.type == "private")
-async def start_other_phone_vote(message: Message, state: FSMContext, redis: Redis):
-    user_id = message.from_user.id
-
-    if not check_is_admin(user_id):
-        from app.services.countdown import get_countdown_info
-        c_str, c_html, is_started = get_countdown_info()
-        await message.answer(
-            c_html,
-            parse_mode="HTML"
-        )
-        return
-
+async def start_website_vote_prompt(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(VoteStates.waiting_for_phone)
 
     text = (
-        f"{emoji_manager.get('other_phone')} <b>Boshqa telefon raqami orqali ovoz berish:</b>\n\n"
-        "Iltimos, ovoz beriladigan telefon raqamini quyidagi formatda yozib yuboring:\n"
-        "Masalan: <code>+998901234567</code> yoki <code>901234567</code>"
+        f"{emoji_manager.get('vote')} <b>OPENBUDGET SAYTIDA OVOZ BERISH:</b>\n\n"
+        f"1️⃣ Pastdagi <b>🌐 OpenBudget Saytiga O'tish</b> tugmasini bosing va loyihaga ovoz bering.\n"
+        f"2️⃣ Saytdan ovoz berib bo'lgach, ovoz bergan <b>telefon raqamingizni</b> shu botga yuboring!\n\n"
+        f"<i>(Ovozingiz adminlarimiz tomonidan tekshirilib, pulingiz kartangizga o'tkazib beriladi)</i>\n\n"
+        f"👇 <b>Ovoz bergan telefon raqamingizni yozing (Masalan: +998901234567):</b>"
     )
-    await message.answer(text, reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+    await message.answer(
+        text,
+        reply_markup=get_openbudget_site_keyboard(),
+        parse_mode="HTML"
+    )
 
 @router.message(VoteStates.waiting_for_phone, F.contact)
 async def process_phone_contact(message: Message, state: FSMContext, session: AsyncSession):
     contact = message.contact
     raw_phone = contact.phone_number
-    await handle_phone_submission(message, state, session, raw_phone)
+    await handle_voted_phone_submission(message, state, session, raw_phone)
 
 @router.message(VoteStates.waiting_for_phone, F.text)
 async def process_phone_text(message: Message, state: FSMContext, session: AsyncSession):
     raw_phone = message.text.strip()
-    await handle_phone_submission(message, state, session, raw_phone)
+    await handle_voted_phone_submission(message, state, session, raw_phone)
 
-async def handle_phone_submission(message: Message, state: FSMContext, session: AsyncSession, raw_phone: str):
+async def handle_voted_phone_submission(message: Message, state: FSMContext, session: AsyncSession, raw_phone: str):
     normalized_phone = clean_phone_number(raw_phone)
     is_adm = check_is_admin(message.from_user.id)
 
     if not is_valid_uzbek_phone(normalized_phone):
         await message.answer(
-            f"{emoji_manager.get('warning')} Faqat O'zbekiston mobil raqamlari (+998) orqali ovoz berish mumkin.",
+            f"{emoji_manager.get('warning')} <b>Telefon raqami noto'g'ri kiritildi!</b>\n"
+            "Iltimos, <code>+998XXXXXXXXX</code> formatidagi raqamni yuboring:",
             reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"
         )
         return
 
-    stmt = select(Vote).where(Vote.voted_phone_number == normalized_phone)
+    # Check if this phone has already been submitted in tickets
+    stmt = select(PayoutTicket).where(PayoutTicket.destination.contains(normalized_phone))
     res = await session.execute(stmt)
-    existing_vote = res.scalar_one_or_none()
+    existing_ticket = res.scalar_one_or_none()
 
-    if existing_vote and existing_vote.status == VoteStatus.VERIFIED:
+    if existing_ticket and existing_ticket.status in [TicketStatus.PAID, TicketStatus.PENDING]:
         await message.answer(
-            f"{emoji_manager.get('danger')} <b>Ushbu raqam ({normalized_phone}) orqali allaqachon ovoz berilgan!</b>\n"
-            f"Bitta raqamdan faqat 1 marta ovoz berish mumkin.",
-            reply_markup=get_main_menu_keyboard(is_admin=is_adm),
-            parse_mode="HTML"
-        )
-        await state.clear()
-        return
-
-    await message.answer(
-        f"{emoji_manager.get('timer')} OpenBudget serveridan SMS kod so'ralmoqda...",
-        reply_markup=get_cancel_keyboard(),
-        parse_mode="HTML"
-    )
-    
-    success, api_msg, extra = await openbudget_api.send_otp(normalized_phone)
-
-    if not success:
-        await message.answer(
-            f"{emoji_manager.get('danger')} {api_msg}",
+            f"{emoji_manager.get('danger')} <b>Ushbu raqam ({normalized_phone}) bo'yicha allaqachon zayavka mavjud!</b>\n"
+            f"Bitta raqamdan faqat 1 marta ovoz berib pul olish mumkin.",
             reply_markup=get_main_menu_keyboard(is_admin=is_adm),
             parse_mode="HTML"
         )
@@ -128,110 +102,127 @@ async def handle_phone_submission(message: Message, state: FSMContext, session: 
         return
 
     await state.update_data(voted_phone=normalized_phone)
-    await state.set_state(VoteStates.waiting_for_otp)
+    await state.set_state(PayoutStates.waiting_for_card)
 
     await message.answer(
-        f"{emoji_manager.get('speaker')} <b>SMS tasdiqlash kodi +{normalized_phone} raqamiga yuborildi!</b>\n\n"
-        f"Telefonga kelgan 6 xonali SMS kodni botga kiriting:",
+        f"{emoji_manager.get('balance')} <b>Pul o'tkazib beriladigan karta yoki telefon raqamingizni kiriting:</b>\n\n"
+        f"Format: <code>8600123456789012</code> (Karta) yoki <code>+998901234567</code> (Paynet)\n"
+        f"Mukofot summa: <b>{settings.DEFAULT_REWARD_PER_VOTE:,} UZS</b>",
         reply_markup=get_cancel_keyboard(),
         parse_mode="HTML"
     )
 
-@router.message(VoteStates.waiting_for_otp)
-async def process_otp_code(message: Message, state: FSMContext, session: AsyncSession, bot_identifier: str = "bot1"):
-    otp_code = message.text.strip() if message.text else ""
-    data = await state.get_data()
-    voted_phone = data.get("voted_phone")
+@router.message(PayoutStates.waiting_for_card, F.chat.type == "private")
+async def process_payout_dest_input(message: Message, state: FSMContext, session: AsyncSession, bot_identifier: str = "bot1"):
+    raw_dest = message.text.strip() if message.text else ""
+    clean_dest = raw_dest.replace(" ", "")
     user_id = message.from_user.id
     is_adm = check_is_admin(user_id)
 
-    if not otp_code.isdigit() or len(otp_code) != 6:
+    p_type = PayoutType.CARD if len(clean_dest) == 16 and clean_dest.isdigit() else PayoutType.PHONE
+
+    if p_type == PayoutType.CARD:
+        if not is_valid_card_number(clean_dest):
+            await message.answer(
+                f"{emoji_manager.get('warning')} <b>Karta raqami noto'g'ri kiritildi!</b>\n"
+                "Iltimos, 16 ta raqamdan iborat Uzcard/Humo karta yuboring:",
+                reply_markup=get_cancel_keyboard(),
+                parse_mode="HTML"
+            )
+            return
+
+        await state.update_data(clean_card_number=clean_dest)
+        await state.set_state(PayoutStates.waiting_for_card_holder_name)
+
         await message.answer(
-            f"{emoji_manager.get('warning')} Iltimos, faqat 6 xonali raqamdan iborat SMS kodni kiriting.",
+            f"{emoji_manager.get('user_admin')} <b>Karta egasining Ismi va Familiyasini kiriting:</b>\n\n"
+            "<i>Iltimos, kartangiz ustidagi ism va familiyangizni yozing (masalan: ALISHER NAVOIY):</i>",
             reply_markup=get_cancel_keyboard(),
             parse_mode="HTML"
         )
-        return
-
-    await message.answer(
-        f"{emoji_manager.get('timer')} SMS kod OpenBudget bazasida tekshirilmoqda...",
-        reply_markup=get_cancel_keyboard(),
-        parse_mode="HTML"
-    )
-
-    verified, msg, openbudget_tx_id = await openbudget_api.verify_otp(voted_phone, otp_code)
-
-    if not verified:
-        await message.answer(
-            f"{emoji_manager.get('danger')} {msg}\n\nQayta urinib ko'ring yoki kodni tekshiring.",
-            reply_markup=get_cancel_keyboard(),
-            parse_mode="HTML"
-        )
-        return
-
-    user_stmt = select(User).where(User.telegram_id == user_id)
-    u_res = await session.execute(user_stmt)
-    user_obj = u_res.scalar_one_or_none()
-
-    vote_stmt = select(Vote).where(Vote.voted_phone_number == voted_phone)
-    v_res = await session.execute(vote_stmt)
-    vote_rec = v_res.scalar_one_or_none()
-
-    if not vote_rec:
-        vote_rec = Vote(
-            telegram_id=user_id,
-            voted_phone_number=voted_phone,
-            openbudget_project_id=settings.OPENBUDGET_PROJECT_ID,
-            openbudget_tx_id=openbudget_tx_id,
-            bot_identifier=bot_identifier,
-            status=VoteStatus.VERIFIED
-        )
-        session.add(vote_rec)
     else:
-        vote_rec.status = VoteStatus.VERIFIED
-        vote_rec.openbudget_tx_id = openbudget_tx_id
-        vote_rec.bot_identifier = bot_identifier
+        norm_phone = clean_phone_number(clean_dest)
+        if not is_valid_uzbek_phone(norm_phone):
+            await message.answer(
+                f"{emoji_manager.get('warning')} <b>To'lov rekviziti noto'g'ri kiritildi!</b>\n"
+                "16 ta raqamli Karta yoki <code>+998XXXXXXXXX</code> formatdagi telefon raqam yuboring:",
+                reply_markup=get_cancel_keyboard(),
+                parse_mode="HTML"
+            )
+            return
 
-    if user_obj:
-        user_obj.balance_uzs += settings.DEFAULT_REWARD_PER_VOTE
+        data = await state.get_data()
+        voted_phone = data.get("voted_phone")
 
-        if user_obj.referrer_id:
-            referrer_stmt = select(User).where(User.telegram_id == user_obj.referrer_id)
-            ref_res = await session.execute(referrer_stmt)
-            referrer_obj = ref_res.scalar_one_or_none()
+        success, msg, ticket = await create_payout_ticket(
+            session=session,
+            telegram_id=user_id,
+            vote_id=None,
+            payout_type=PayoutType.PHONE,
+            destination=f"{voted_phone} -> Paynet: {norm_phone}",
+            bot=message.bot,
+            bot_identifier=bot_identifier
+        )
 
-            if referrer_obj:
-                referrer_obj.referral_count += 1
-                try:
-                    await message.bot.send_message(
-                        chat_id=referrer_obj.telegram_id,
-                        text=(
-                            f"{emoji_manager.get('welcome')} <b>YANGI REFERAL!</b>\n\n"
-                            f"Siz taklif qilgan do'stingiz OpenBudget loyihasiga ovoz berdi!\n"
-                            f"{emoji_manager.get('users_icon')} Jami taklif qilgan do'stlaringiz: <b>{referrer_obj.referral_count} ta</b>"
-                        ),
-                        parse_mode="HTML"
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to notify referrer {referrer_obj.telegram_id}: {e}")
+        await state.clear()
 
-    await session.commit()
-    await session.refresh(vote_rec)
+        if not success or not ticket:
+            await message.answer(f"{emoji_manager.get('danger')} {msg}", reply_markup=get_main_menu_keyboard(is_admin=is_adm), parse_mode="HTML")
+            return
+
+        user_ack = (
+            f"{emoji_manager.get('success')} <b>ZAYAVKA MUVAFFAQIYATLI YARATILDI!</b>\n\n"
+            f"{emoji_manager.get('tickets_icon')} Zayavka kodi: <code>{ticket.ticket_code}</code>\n"
+            f"{emoji_manager.get('other_phone')} Ovoz berilgan raqam: <code>{voted_phone}</code>\n"
+            f"{emoji_manager.get('balance')} To'lov raqami: <code>{norm_phone}</code>\n"
+            f"{emoji_manager.get('warning')} Holat: <b>Ko'rib chiqilmoqda (Pending)</b>\n\n"
+            f"Adminlarimiz saytdan ovozingizni tekshirib, to'lovni amalga oshirgach bildirishnoma keladi."
+        )
+        await message.answer(user_ack, reply_markup=get_main_menu_keyboard(is_admin=is_adm), parse_mode="HTML")
+
+@router.message(PayoutStates.waiting_for_card_holder_name, F.chat.type == "private")
+async def process_card_holder_name_input(message: Message, state: FSMContext, session: AsyncSession, bot_identifier: str = "bot1"):
+    holder_name = message.text.strip() if message.text else ""
+    user_id = message.from_user.id
+    is_adm = check_is_admin(user_id)
+
+    if len(holder_name) < 3:
+        await message.answer(f"{emoji_manager.get('warning')} Iltimos, karta egasining to'liq ism va familiyasini kiriting (masalan: ALISHER NAVOIY):", reply_markup=get_cancel_keyboard(), parse_mode="HTML")
+        return
+
+    data = await state.get_data()
+    card_clean = data.get("clean_card_number")
+    voted_phone = data.get("voted_phone")
+
+    success, msg, ticket = await create_payout_ticket(
+        session=session,
+        telegram_id=user_id,
+        vote_id=None,
+        payout_type=PayoutType.CARD,
+        destination=f"{voted_phone} -> Karta: {card_clean}",
+        card_holder_name=holder_name,
+        bot=message.bot,
+        bot_identifier=bot_identifier
+    )
 
     await state.clear()
 
-    cur_bal = user_obj.balance_uzs if user_obj else settings.DEFAULT_REWARD_PER_VOTE
+    if not success or not ticket:
+        await message.answer(f"{emoji_manager.get('danger')} {msg}", reply_markup=get_main_menu_keyboard(is_admin=is_adm), parse_mode="HTML")
+        return
 
-    congratulations_text = (
-        f"{emoji_manager.get('success')} <b>TABRIKLAYMIZ! OVOZINGIZ ({voted_phone}) MUVAFFAQIYATLI TASDIQLANDI!</b>\n\n"
-        f"{emoji_manager.get('paid_icon')} OpenBudget tranzaksiya ID: <code>{openbudget_tx_id}</code>\n"
-        f"{emoji_manager.get('balance')} Balansingizga: <b>+{settings.DEFAULT_REWARD_PER_VOTE:,} UZS</b> qo'shildi!\n"
-        f"{emoji_manager.get('lock_icon')} <b>Jami balansingiz: {cur_bal:,} UZS</b>\n\n"
-        f"{emoji_manager.get('finger_down')} Mukofot pulini hoziroq kartangizga yechib olishingiz yoki boshqa raqamdan ovoz berishingiz mumkin:"
+    safe_holder = html.escape(holder_name)
+    user_ack = (
+        f"{emoji_manager.get('success')} <b>ZAYAVKA MUVAFFAQIYATLI YARATILDI!</b>\n\n"
+        f"{emoji_manager.get('tickets_icon')} Zayavka kodi: <code>{ticket.ticket_code}</code>\n"
+        f"{emoji_manager.get('other_phone')} Ovoz berilgan raqam: <code>{voted_phone}</code>\n"
+        f"{emoji_manager.get('balance')} Karta raqam: <code>{card_clean}</code>\n"
+        f"{emoji_manager.get('user_admin')} Karta egasi: <b>{safe_holder}</b>\n"
+        f"{emoji_manager.get('warning')} Holat: <b>Ko'rib chiqilmoqda (Pending)</b>\n\n"
+        f"Adminlarimiz saytdan ovozingizni tekshirib, to'lovni amalga oshirgach bildirishnoma keladi."
     )
-
     await message.answer(
-        congratulations_text,
-        reply_markup=get_payout_choice_keyboard(vote_id=vote_rec.id),
+        user_ack,
+        reply_markup=get_main_menu_keyboard(is_admin=is_adm),
         parse_mode="HTML"
     )
