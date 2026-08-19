@@ -190,10 +190,10 @@ def get_admin_dashboard_keyboard() -> InlineKeyboardMarkup:
                     callback_data="admin_menu:pending"
                 ),
                 make_inline_btn(
-                    text="OpenBudget ID",
-                    key="pin_icon",
+                    text="Ovozlar Statistikasi",
+                    key="votes_icon",
                     style="primary",
-                    callback_data="admin_menu:change_project_id"
+                    callback_data="admin_menu:users_stats"
                 )
             ],
             [
@@ -218,33 +218,41 @@ def get_admin_dashboard_keyboard() -> InlineKeyboardMarkup:
                     callback_data="admin_menu:adjust_votes"
                 ),
                 make_inline_btn(
+                    text="OpenBudget ID",
+                    key="pin_icon",
+                    style="primary",
+                    callback_data="admin_menu:change_project_id"
+                )
+            ],
+            [
+                make_inline_btn(
                     text="Premium Emojilar",
                     key="welcome",
                     style="primary",
                     callback_data="admin_menu:emojis"
-                )
-            ],
-            [
+                ),
                 make_inline_btn(
                     text="Top Referrallar",
                     key="top_ref",
                     style="primary",
                     callback_data="admin_menu:top_ref"
-                ),
+                )
+            ],
+            [
                 make_inline_btn(
                     text="Faol Guruhlar",
                     key="groups_icon",
                     style="primary",
                     callback_data="admin_menu:groups"
-                )
-            ],
-            [
+                ),
                 make_inline_btn(
                     text="Guruhlarga Reklama",
                     key="speaker",
                     style="success",
                     callback_data="admin_menu:broadcast"
-                ),
+                )
+            ],
+            [
                 make_inline_btn(
                     text="Yangilash",
                     key="system_icon",

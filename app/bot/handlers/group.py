@@ -13,11 +13,11 @@ logger = logging.getLogger(__name__)
 router = Router()
 
 def get_group_promo_keyboard(bot_username: str) -> InlineKeyboardMarkup:
-    """Returns promotional inline keyboard in Premium format with custom emoji icon and primary style."""
+    """Returns promotional inline keyboard in Premium format with custom emoji icon and success style."""
     kwargs = {
-        "text": "Ovoz berish va pul mukofotini olish",
-        "url": f"https://t.me/{bot_username}?start=group_vote",
-        "style": "primary"
+        "text": "🤖 Botga O'tish hamda Ovoz Berish",
+        "url": f"https://t.me/{bot_username}?start=group_promo",
+        "style": "success"
     }
     emoji_id = emoji_manager.get_emoji_id("vote")
     if emoji_id:
@@ -74,7 +74,7 @@ async def on_bot_group_state_change(event: ChatMemberUpdated, session: AsyncSess
 @router.message(Command("reklama"), F.chat.type.in_(["group", "supergroup"]))
 @router.message(Command("ovoz"), F.chat.type.in_(["group", "supergroup"]))
 async def group_countdown_cmd(message: Message):
-    """Group command displaying live countdown to August 22, 00:00 GMT+5."""
+    """Group command displaying live countdown and referral earning promo."""
     bot_info = await message.bot.get_me()
     countdown_text, _ = get_countdown_text()
     await message.answer(

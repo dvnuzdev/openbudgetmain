@@ -16,12 +16,13 @@ def get_countdown_info() -> Tuple[str, str, bool]:
 
     e_timer = emoji_manager.get("timer")
     e_cal = emoji_manager.get("calendar")
-    e_build = emoji_manager.get("building")
-    e_spk = emoji_manager.get("speaker")
-    e_bal = emoji_manager.get("balance")
+    e_wel = emoji_manager.get("welcome")
+    e_vote = emoji_manager.get("vote")
+    e_link = emoji_manager.get("link")
+    e_finger = emoji_manager.get("finger_down")
 
     if diff.total_seconds() <= 0:
-        return "0 kun, 00 soat, 00 daqiqa", f"🚀 <b>OPENBUDGET OVOZ BERISH MAVSUMI RASMAN BOSHLANDI!</b>", True
+        return "0 kun, 00 soat, 00 daqiqa", f"🚀 <b>OPENBUDGET MAVSUMI RASMAN BOSHLANDI!</b>\n\nBotga o'tib ovoz bering va pul mukofotini oling!", True
 
     days = diff.days
     hours, remainder = divmod(diff.seconds, 3600)
@@ -30,11 +31,11 @@ def get_countdown_info() -> Tuple[str, str, bool]:
     countdown_str = f"{days} kun, {hours:02d} soat, {minutes:02d} daqiqa"
 
     formatted_html = (
-        f"{e_timer} <b>OPENBUDGET MAVSUMI HALI BOSHLANMADI!</b>\n\n"
-        f"<blockquote>{e_cal} <b>Ovoz berish boshlanishiga:</b> <code>{countdown_str}</code> qoldi!\n\n"
-        f"{e_spk} <b>ESLATMA:</b> OpenBudget mavsumi rasman boshlanishi bilan botimiz avtomatik ishga tushadi va ovozlarni qabul qila boshlaydi.\n\n"
-        f"{e_build} Loyihamizni qo'llab-quvvatlashga tayyor turing!\n"
-        f"{e_bal} Boshlanishi bilan ovoz bering va pul mukofotini kartangizga oling!</blockquote>"
+        f"{e_wel} <b>OPENBUDGET RASMIY BOTI</b>\n\n"
+        f"<blockquote>{e_timer} <b>Ovoz berish boshlanishiga:</b> <code>{countdown_str}</code> qoldi!\n\n"
+        f"{e_vote} OpenBudget rasmiy botida o'z raqamingiz hamda yaqinlaringiz raqamidan ovoz bering va pul mukofotini oling!\n\n"
+        f"{e_link} <b>Referal Tizimi:</b> Shaxsiy taklif havolangiz orqali do'stlaringizni taklif qiling va ular bergan har bir ovoz uchun doimiy qo'shimcha daromad ishlang!</blockquote>\n\n"
+        f"{e_finger} <b>Botga o'tib hoziroq boshlash uchun pastdagi tugmani bosing:</b>"
     )
 
     return countdown_str, formatted_html, False

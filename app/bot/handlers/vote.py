@@ -19,6 +19,12 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 router = Router()
 
+MENU_KEYWORDS = [
+    "Ovoz berish", "Boshqa raqamdan ovoz", "Statistikam", "To'lov holati",
+    "To'lovlar kanali", "Mening havolam", "Top Referrallar", "Yordam / Qoidalar",
+    "Admin Panel"
+]
+
 def check_is_admin(user_id: int) -> bool:
     return user_id in settings.admin_id_list
 
@@ -51,14 +57,19 @@ async def start_website_vote_prompt(message: Message, state: FSMContext):
 
     text = (
         f"{emoji_manager.get('vote')} <b>OPENBUDGET SAYTIDA OVOZ BERISH:</b>\n\n"
-        f"1️⃣ Pastdagi <b>🌐 OpenBudget Saytiga O'tish</b> tugmasini bosing va loyihaga ovoz bering.\n"
-        f"2️⃣ Saytdan ovoz berib bo'lgach, ovoz bergan <b>telefon raqamingizni</b> shu botga yuboring!\n\n"
+        f"1️⃣ Pastdagi <b>🌐 OpenBudget Saytiga O'tish</b> tugmasini bosing va saytdan loyihaga ovoz bering.\n"
+        f"2️⃣ Ovoz berib bo'lgach, ovoz bergan <b>telefon raqamingizni</b> shu botga yozib yuboring!\n\n"
         f"<i>(Ovozingiz adminlarimiz tomonidan tekshirilib, pulingiz kartangizga o'tkazib beriladi)</i>\n\n"
         f"👇 <b>Ovoz bergan telefon raqamingizni yozing (Masalan: +998901234567):</b>"
     )
     await message.answer(
         text,
         reply_markup=get_openbudget_site_keyboard(),
+        parse_mode="HTML"
+    )
+    await message.answer(
+        f"{emoji_manager.get('finger_down')} Ovoz berishni to'xtatish uchun pastdagi <b>Bekor qilish</b> tugmasini bosing:",
+        reply_markup=get_cancel_keyboard(),
         parse_mode="HTML"
     )
 
@@ -70,8 +81,16 @@ async def process_phone_contact(message: Message, state: FSMContext, session: As
 
 @router.message(VoteStates.waiting_for_phone, F.text)
 async def process_phone_text(message: Message, state: FSMContext, session: AsyncSession):
-    raw_phone = message.text.strip()
-    await handle_voted_phone_submission(message, state, session, raw_phone)
+    raw_text = message.text.strip() if message.text else ""
+
+    # Check if user clicked any main menu item instead of typing phone
+    for kw in MENU_KEYWORDS:
+        if kw.lower() in raw_text.lower():
+            logger.info(f"User clicked menu item '{raw_text}' while in waiting_for_phone state. Clearing state.")
+            await state.clear()
+            return  # Allow other handlers to process the menu command smoothly
+
+    await handle_voted_phone_submission(message, state, session, raw_text)
 
 async def handle_voted_phone_submission(message: Message, state: FSMContext, session: AsyncSession, raw_phone: str):
     normalized_phone = clean_phone_number(raw_phone)
@@ -115,6 +134,13 @@ async def handle_voted_phone_submission(message: Message, state: FSMContext, ses
 @router.message(PayoutStates.waiting_for_card, F.chat.type == "private")
 async def process_payout_dest_input(message: Message, state: FSMContext, session: AsyncSession, bot_identifier: str = "bot1"):
     raw_dest = message.text.strip() if message.text else ""
+
+    # Check if user clicked any main menu item
+    for kw in MENU_KEYWORDS:
+        if kw.lower() in raw_dest.lower():
+            await state.clear()
+            return
+
     clean_dest = raw_dest.replace(" ", "")
     user_id = message.from_user.id
     is_adm = check_is_admin(user_id)
@@ -185,6 +211,11 @@ async def process_card_holder_name_input(message: Message, state: FSMContext, se
     holder_name = message.text.strip() if message.text else ""
     user_id = message.from_user.id
     is_adm = check_is_admin(user_id)
+
+    for kw in MENU_KEYWORDS:
+        if kw.lower() in holder_name.lower():
+            await state.clear()
+            return
 
     if len(holder_name) < 3:
         await message.answer(f"{emoji_manager.get('warning')} Iltimos, karta egasining to'liq ism va familiyasini kiriting (masalan: ALISHER NAVOIY):", reply_markup=get_cancel_keyboard(), parse_mode="HTML")

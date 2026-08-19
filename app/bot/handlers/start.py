@@ -5,7 +5,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, CommandObject
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, func
-from app.database.models import User
+from app.database.models import User, Vote, VoteStatus
 from app.bot.keyboards.reply import get_main_menu_keyboard
 from app.bot.keyboards.inline import get_admin_dashboard_keyboard, get_payout_proof_channel_keyboard, get_help_contacts_keyboard, PAYOUT_CHANNEL_DIRECT_URL
 from app.services.countdown import get_countdown_info
@@ -99,6 +99,29 @@ async def cmd_start(message: Message, command: CommandObject, session: AsyncSess
             f"{emoji_manager.get('finger_down')} Kerakli bo'limni tanlang:"
         )
         await message.answer(fallback_text, reply_markup=get_main_menu_keyboard(is_admin=is_adm), parse_mode="HTML")
+
+@router.message(F.text.contains("Statistikam"), F.chat.type == "private")
+async def show_user_personal_stats(message: Message, session: AsyncSession):
+    user_id = message.from_user.id
+    u_stmt = select(User).where(User.telegram_id == user_id)
+    u_res = await session.execute(u_stmt)
+    user_obj = u_res.scalar_one_or_none()
+
+    v_stmt = select(func.count(Vote.id)).where(Vote.telegram_id == user_id, Vote.status == VoteStatus.VERIFIED)
+    v_count = (await session.execute(v_stmt)).scalar_one_or_none() or 0
+
+    full_name = html.escape(user_obj.full_name if user_obj else message.from_user.full_name)
+    balance = user_obj.balance_uzs if user_obj else 0
+    ref_count = user_obj.referral_count if user_obj else 0
+
+    stats_text = (
+        f"{emoji_manager.get('votes_icon')} <b>SHAXSIY STATISTIKANGIZ ({full_name}):</b>\n\n"
+        f"<blockquote>🗳 <b>Bergan ovozlaringiz:</b> {v_count} ta\n"
+        f"👥 <b>Taklif qilgan do'stlaringiz:</b> {ref_count} ta\n"
+        f"💰 <b>Joriy balansingiz:</b> {balance:,} UZS\n"
+        f"🎯 <b>Yechish chegarasi:</b> {v_count}/{settings.MIN_VOTES_FOR_WITHDRAWAL} ta ovoz</blockquote>"
+    )
+    await message.answer(stats_text, parse_mode="HTML")
 
 @router.message(F.text.contains("Yordam"), F.chat.type == "private")
 async def show_help_rules(message: Message):
