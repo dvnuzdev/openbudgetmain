@@ -82,7 +82,7 @@ async def build_admin_stats_text(session: AsyncSession, redis: Redis, bot_identi
     stats_text = (
         f"{e_admin} <b>ADMIN PANEL — BOT STATISTIKASI</b>\n\n"
         f"<blockquote>{e_users} Foydalanuvchilar: <b>{total_users}</b> ta\n"
-        f"{e_votes} Ovozlar: <b>{total_votes}</b> ta (Manually offset: {settings.MANUAL_VOTE_OFFSET:+d})\n"
+        f"{e_votes} Ovozlar: <b>{total_votes}</b> ta\n"
         f"{e_tickets} Kutilayotgan zayavkalar: <b>{total_pending}</b> ta\n"
         f"{e_groups} Faol guruhlar: <b>{active_groups}</b> ta\n\n"
         f"{e_pin} Loyiha ID: <code>{settings.OPENBUDGET_PROJECT_ID}</code>\n"
@@ -218,6 +218,32 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
         stats_text = await build_admin_stats_text(session, redis, bot_identifier)
         await callback.message.edit_text(stats_text, reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
         await callback.answer("Yangilandi!")
+
+    elif action == "users_stats":
+        stmt = (
+            select(
+                User.telegram_id,
+                User.full_name,
+                User.username,
+                func.count(Vote.id).label("vote_count")
+            )
+            .outerjoin(Vote, (Vote.telegram_id == User.telegram_id) & (Vote.status == VoteStatus.VERIFIED))
+            .group_by(User.telegram_id, User.full_name, User.username)
+            .order_by(desc("vote_count"), User.telegram_id)
+        )
+        res = await session.execute(stmt)
+        users_votes = res.all()
+
+        if not users_votes:
+            text = f"{emoji_manager.get('votes_icon')} <b>FOYDALANUVCHILAR OVOZLAR STATISTIKASI:</b>\n\n<i>Foydalanuvchilar topilmadi.</i>"
+        else:
+            text = f"{emoji_manager.get('votes_icon')} <b>FOYDALANUVCHILAR OVOZLAR STATISTIKASI:</b>\n\n"
+            for idx, row in enumerate(users_votes, 1):
+                name = html.escape(row.full_name or f"User_{row.telegram_id}")
+                text += f"{idx}. <b>{name}</b> (<code>{row.telegram_id}</code>) — <b>{row.vote_count} ta</b> ovoz\n"
+
+        await callback.message.edit_text(text, reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
+        await callback.answer()
 
     elif action == "emojis":
         await callback.message.edit_text(
@@ -672,7 +698,7 @@ async def process_admin_custom_reject_reason(message: Message, state: FSMContext
     if success:
         safe_r = html.escape(reason_text)
         await message.answer(
-            f"{emoji_manager.get('danger')} <b>Zayavka #{ticket_id} rad etildi.</b>\nSabab: <code>{safe_r}</code>",
+            f"{emoji_manager.get('danger')} <b>ZAYAVKA #{ticket_id} rad etildi.</b>\nSabab: <code>{safe_r}</code>",
             parse_mode="HTML"
         )
     else:
