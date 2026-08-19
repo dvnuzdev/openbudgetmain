@@ -23,14 +23,22 @@ def check_is_admin(user_id: int) -> bool:
     return user_id in settings.admin_id_list
 
 def get_openbudget_site_keyboard() -> InlineKeyboardMarkup:
-    """Returns inline keyboard linking to official OpenBudget voting portal."""
+    """Returns inline keyboard linking dynamically to the configured OpenBudget project ID URL."""
+    project_id = str(settings.OPENBUDGET_PROJECT_ID).strip()
+    if project_id.startswith("http://") or project_id.startswith("https://"):
+        target_url = project_id
+    elif "/" in project_id:
+        target_url = f"https://openbudget.uz/{project_id.lstrip('/')}"
+    else:
+        target_url = f"https://openbudget.uz/boards/initiatives/initiative/{project_id}"
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="🌐 OpenBudget Saytiga O'tish",
                     style="success",
-                    url="https://openbudget.uz/board-initiatives"
+                    url=target_url
                 )
             ]
         ]
@@ -78,7 +86,6 @@ async def process_phone_text(message: Message, state: FSMContext, session: Async
     raw_text = message.text.strip() if message.text else ""
     raw_lower = raw_text.lower()
 
-    # Direct routing for menu buttons clicked while in state
     if "statistika" in raw_lower:
         await state.clear()
         from app.bot.handlers.start import show_public_general_stats
@@ -140,7 +147,6 @@ async def handle_voted_phone_submission(message: Message, state: FSMContext, ses
         )
         return
 
-    # Check if this phone has already been submitted in tickets
     stmt = select(PayoutTicket).where(PayoutTicket.destination.contains(normalized_phone))
     res = await session.execute(stmt)
     existing_ticket = res.scalar_one_or_none()
