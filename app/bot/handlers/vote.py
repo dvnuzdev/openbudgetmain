@@ -32,16 +32,20 @@ def get_openbudget_site_keyboard() -> InlineKeyboardMarkup:
     else:
         target_url = f"https://openbudget.uz/boards/initiatives/initiative/{project_id}"
 
+    btn_kwargs = {
+        "url": target_url,
+        "style": "success"
+    }
+    emoji_id = emoji_manager.get_emoji_id("system_icon") or emoji_manager.get_emoji_id("vote")
+    if emoji_id:
+        btn_kwargs["icon_custom_emoji_id"] = emoji_id
+        btn_kwargs["text"] = "OpenBudget Saytiga O'tish"
+    else:
+        plain_sys = emoji_manager.get_plain("system_icon")
+        btn_kwargs["text"] = f"{plain_sys} OpenBudget Saytiga O'tish"
+
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🌐 OpenBudget Saytiga O'tish",
-                    style="success",
-                    url=target_url
-                )
-            ]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(**btn_kwargs)]]
     )
 
 @router.message(F.text.contains("Bekor qilish"))
@@ -57,12 +61,15 @@ async def start_website_vote_prompt(message: Message, state: FSMContext):
     await state.clear()
     await state.set_state(VoteStates.waiting_for_phone)
 
+    n1 = emoji_manager.get("num_1")
+    n2 = emoji_manager.get("num_2")
+
     text = (
         f"{emoji_manager.get('vote')} <b>OPENBUDGET SAYTIDA OVOZ BERISH:</b>\n\n"
-        f"1️⃣ Pastdagi <b>🌐 OpenBudget Saytiga O'tish</b> tugmasini bosing va saytdan loyihaga ovoz bering.\n"
-        f"2️⃣ Ovoz berib bo'lgach, ovoz bergan <b>telefon raqamingizni</b> shu botga yozib yuboring!\n\n"
+        f"{n1} Pastdagi <b>OpenBudget Saytiga O'tish</b> tugmasini bosing va saytdan loyihaga ovoz bering.\n"
+        f"{n2} Ovoz berib bo'lgach, ovoz bergan <b>telefon raqamingizni</b> shu botga yozib yuboring!\n\n"
         f"<i>(Ovozingiz adminlarimiz tomonidan tekshirilib, pulingiz kartangizga o'tkazib beriladi)</i>\n\n"
-        f"👇 <b>Ovoz bergan telefon raqamingizni yozing (Masalan: +998901234567):</b>"
+        f"{emoji_manager.get('finger_down')} <b>Ovoz bergan telefon raqamingizni yozing (Masalan: +998901234567):</b>"
     )
     await message.answer(
         text,

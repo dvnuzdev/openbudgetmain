@@ -2,15 +2,18 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from app.services.emoji_manager import emoji_manager
 
 def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
-    """Returns main menu reply keyboard with Left buttons = Green (success), Right buttons = Blue (primary)."""
+    """Returns main menu reply keyboard with custom emoji icons or clean plain fallbacks."""
     def make_btn(text: str, key: str, style: str = None) -> KeyboardButton:
-        plain_emoji = emoji_manager.get_plain(key)
-        kwargs = {"text": f"{plain_emoji} {text}"}
+        kwargs = {}
         if style:
             kwargs["style"] = style
         emoji_id = emoji_manager.get_emoji_id(key)
         if emoji_id:
             kwargs["icon_custom_emoji_id"] = emoji_id
+            kwargs["text"] = text
+        else:
+            plain_emoji = emoji_manager.get_plain(key)
+            kwargs["text"] = f"{plain_emoji} {text}"
         return KeyboardButton(**kwargs)
 
     buttons = [
@@ -43,11 +46,14 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     """Returns red cancel reply keyboard for FSM states."""
-    plain_cancel = emoji_manager.get_plain("cancel")
-    kwargs = {"text": f"{plain_cancel} Bekor qilish", "style": "danger"}
+    kwargs = {"style": "danger"}
     emoji_id = emoji_manager.get_emoji_id("cancel")
     if emoji_id:
         kwargs["icon_custom_emoji_id"] = emoji_id
+        kwargs["text"] = "Bekor qilish"
+    else:
+        plain_cancel = emoji_manager.get_plain("cancel")
+        kwargs["text"] = f"{plain_cancel} Bekor qilish"
 
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -59,16 +65,28 @@ def get_cancel_keyboard() -> ReplyKeyboardMarkup:
 
 def get_phone_request_keyboard() -> ReplyKeyboardMarkup:
     """Returns contact share reply keyboard with styled red cancel button."""
-    plain_cancel = emoji_manager.get_plain("cancel")
-    kwargs_cancel = {"text": f"{plain_cancel} Bekor qilish", "style": "danger"}
-    emoji_id = emoji_manager.get_emoji_id("cancel")
-    if emoji_id:
-        kwargs_cancel["icon_custom_emoji_id"] = emoji_id
+    kwargs_cancel = {"style": "danger"}
+    emoji_id_cancel = emoji_manager.get_emoji_id("cancel")
+    if emoji_id_cancel:
+        kwargs_cancel["icon_custom_emoji_id"] = emoji_id_cancel
+        kwargs_cancel["text"] = "Bekor qilish"
+    else:
+        plain_cancel = emoji_manager.get_plain("cancel")
+        kwargs_cancel["text"] = f"{plain_cancel} Bekor qilish"
+
+    kwargs_contact = {"request_contact": True, "style": "success"}
+    emoji_id_phone = emoji_manager.get_emoji_id("other_phone")
+    if emoji_id_phone:
+        kwargs_contact["icon_custom_emoji_id"] = emoji_id_phone
+        kwargs_contact["text"] = "Telefon raqamni yuborish"
+    else:
+        plain_phone = emoji_manager.get_plain("other_phone")
+        kwargs_contact["text"] = f"{plain_phone} Telefon raqamni yuborish"
 
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="📱 Telefon raqamni yuborish", request_contact=True, style="success")
+                KeyboardButton(**kwargs_contact)
             ],
             [
                 KeyboardButton(**kwargs_cancel)
