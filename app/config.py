@@ -20,7 +20,9 @@ class Settings(BaseSettings):
 
     OPENBUDGET_PROJECT_ID: str = "board_123456"
     DEFAULT_REWARD_PER_VOTE: int = 25000
-    REFERRAL_BONUS_PER_VOTE: int = 0
+    REFERRAL_BONUS_PER_VOTE: int = 5000
+    MANUAL_VOTE_OFFSET: int = 0
+    MIN_VOTES_FOR_WITHDRAWAL: int = 5
     MAX_TOTAL_BUDGET: int = 125000000
 
     # PostgreSQL Fallback Parameters

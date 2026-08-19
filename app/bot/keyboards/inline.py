@@ -198,15 +198,29 @@ def get_admin_dashboard_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 make_inline_btn(
+                    text="Ovoz Narxi (UZS)",
+                    key="paid_icon",
+                    style="success",
+                    callback_data="admin_menu:change_vote_price"
+                ),
+                make_inline_btn(
                     text="Referal Bonusi",
                     key="balance",
                     style="success",
                     callback_data="admin_menu:change_ref_bonus"
+                )
+            ],
+            [
+                make_inline_btn(
+                    text="Ovoz Qo'shish/Ayirish",
+                    key="votes_icon",
+                    style="primary",
+                    callback_data="admin_menu:adjust_votes"
                 ),
                 make_inline_btn(
                     text="Premium Emojilar",
                     key="welcome",
-                    style="success",
+                    style="primary",
                     callback_data="admin_menu:emojis"
                 )
             ],

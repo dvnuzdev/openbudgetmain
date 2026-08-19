@@ -4,8 +4,8 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from app.database.models import PayoutTicket, Vote, PayoutType, TicketStatus, User
+from sqlalchemy import select, func
+from app.database.models import PayoutTicket, Vote, PayoutType, TicketStatus, User, VoteStatus
 from app.bot.states import PayoutStates
 from app.bot.keyboards.inline import get_admin_ticket_keyboard, get_user_ticket_keyboard
 from app.bot.keyboards.reply import get_main_menu_keyboard
@@ -20,8 +20,28 @@ router = Router()
 def check_is_admin(user_id: int) -> bool:
     return user_id in settings.admin_id_list
 
+async def get_user_verified_vote_count(session: AsyncSession, telegram_id: int) -> int:
+    """Returns number of completed/verified votes for user."""
+    stmt = select(func.count(Vote.id)).where(Vote.telegram_id == telegram_id, Vote.status == VoteStatus.VERIFIED)
+    return (await session.execute(stmt)).scalar_one_or_none() or 0
+
 @router.callback_query(F.data.startswith("payout_type:"))
-async def handle_payout_type_choice(callback: CallbackQuery, state: FSMContext):
+async def handle_payout_type_choice(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
+    user_id = callback.from_user.id
+
+    # Minimum 5-vote withdrawal constraint check
+    if not check_is_admin(user_id):
+        v_count = await get_user_verified_vote_count(session, user_id)
+        min_required = settings.MIN_VOTES_FOR_WITHDRAWAL
+        if v_count < min_required:
+            alert_text = (
+                f"⚠️ REFERAL VA MUKOFOT PULINI YECHIB OLISH CHEKLOVI!\n\n"
+                f"Pulni kartangizga yechib olish uchun kamida {min_required} ta ovoz bergan bo'lishingiz kerak!\n\n"
+                f"📊 Siz bergan ovozlar: {v_count} / {min_required} ta"
+            )
+            await callback.answer(alert_text, show_alert=True)
+            return
+
     parts = callback.data.split(":")
     p_type = parts[1] # 'card' or 'phone'
     vote_id_raw = parts[2]
@@ -171,13 +191,15 @@ async def check_user_payout_status(message: Message, session: AsyncSession):
     user_obj = u_res.scalar_one_or_none()
 
     balance = user_obj.balance_uzs if user_obj else 0
+    v_count = await get_user_verified_vote_count(session, user_id)
 
     stmt = select(PayoutTicket).where(PayoutTicket.telegram_id == user_id).order_by(PayoutTicket.created_at.desc()).limit(5)
     res = await session.execute(stmt)
     tickets = res.scalars().all()
 
     text = f"{emoji_manager.get('balance')} <b>SIZNING BALANSINGIZ VA ZAYAVKALARINGIZ:</b>\n\n"
-    text += f"{emoji_manager.get('paid_icon')} <b>Yechib olinadigan Balans: {balance:,} UZS</b>\n\n"
+    text += f"{emoji_manager.get('paid_icon')} <b>Yechib olinadigan Balans: {balance:,} UZS</b>\n"
+    text += f"{emoji_manager.get('vote')} <b>Siz bergan ovozlar: {v_count} / {settings.MIN_VOTES_FOR_WITHDRAWAL} ta</b> (Pulni yechish uchun kamida {settings.MIN_VOTES_FOR_WITHDRAWAL} ta ovoz kerak)\n\n"
 
     if not tickets:
         text += (

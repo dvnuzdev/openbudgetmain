@@ -34,8 +34,14 @@ class AdminReceiptState(StatesGroup):
 class AdminProjectIDState(StatesGroup):
     waiting_for_project_id = State()
 
+class AdminVotePriceState(StatesGroup):
+    waiting_for_price = State()
+
 class AdminRefBonusState(StatesGroup):
     waiting_for_ref_bonus = State()
+
+class AdminVoteAdjustState(StatesGroup):
+    waiting_for_offset = State()
 
 class AdminRejectState(StatesGroup):
     waiting_for_reason = State()
@@ -53,7 +59,8 @@ async def build_admin_stats_text(session: AsyncSession, redis: Redis, bot_identi
     total_users = (await session.execute(total_users_stmt)).scalar_one_or_none() or 0
 
     total_votes_stmt = select(func.count(Vote.id)).where(Vote.status == VoteStatus.VERIFIED)
-    total_votes = (await session.execute(total_votes_stmt)).scalar_one_or_none() or 0
+    raw_votes = (await session.execute(total_votes_stmt)).scalar_one_or_none() or 0
+    total_votes = max(0, raw_votes + settings.MANUAL_VOTE_OFFSET)
 
     total_pending_stmt = select(func.count(PayoutTicket.id)).where(PayoutTicket.status == TicketStatus.PENDING)
     total_pending = (await session.execute(total_pending_stmt)).scalar_one_or_none() or 0
@@ -75,10 +82,11 @@ async def build_admin_stats_text(session: AsyncSession, redis: Redis, bot_identi
     stats_text = (
         f"{e_admin} <b>ADMIN PANEL — BOT STATISTIKASI</b>\n\n"
         f"<blockquote>{e_users} Foydalanuvchilar: <b>{total_users}</b> ta\n"
-        f"{e_votes} Ovozlar: <b>{total_votes}</b> ta\n"
+        f"{e_votes} Ovozlar: <b>{total_votes}</b> ta (Manually offset: {settings.MANUAL_VOTE_OFFSET:+d})\n"
         f"{e_tickets} Kutilayotgan zayavkalar: <b>{total_pending}</b> ta\n"
         f"{e_groups} Faol guruhlar: <b>{active_groups}</b> ta\n\n"
         f"{e_pin} Loyiha ID: <code>{settings.OPENBUDGET_PROJECT_ID}</code>\n"
+        f"{e_paid} Ovoz Narxi: <b>{settings.DEFAULT_REWARD_PER_VOTE:,} UZS</b>\n"
         f"🎁 Referal Bonusi: <b>{settings.REFERRAL_BONUS_PER_VOTE:,} UZS</b>\n"
         f"{e_lock} Band qilingan: <b>{budget.total_reserved_uzs:,} UZS</b>\n"
         f"{e_paid} To'langan: <b>{budget.total_paid_uzs:,} UZS</b></blockquote>"
@@ -229,12 +237,32 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
         )
         await callback.answer()
 
+    elif action == "change_vote_price":
+        await state.set_state(AdminVotePriceState.waiting_for_price)
+        await callback.message.answer(
+            f"💵 <b>Har bir ovoz uchun mukofot narxini kiriting (UZS):</b>\n"
+            f"Hozirgi narx: <b>{settings.DEFAULT_REWARD_PER_VOTE:,} UZS</b>\n\n"
+            f"<i>(Masalan: 25000 deb yozing)</i>",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+
     elif action == "change_ref_bonus":
         await state.set_state(AdminRefBonusState.waiting_for_ref_bonus)
         await callback.message.answer(
             f"🎁 <b>Har bir tasdiqlangan ovoz uchun Referal Bonus summasini kiriting (UZS):</b>\n"
             f"Hozirgi bonus: <b>{settings.REFERRAL_BONUS_PER_VOTE:,} UZS</b>\n\n"
             f"<i>(Masalan: 5000 deb yozing, o'chirish uchun 0 kiriting)</i>",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+
+    elif action == "adjust_votes":
+        await state.set_state(AdminVoteAdjustState.waiting_for_offset)
+        await callback.message.answer(
+            f"📊 <b>Ovozlar statistikasi soniga qo'shish yoki ayirish:</b>\n"
+            f"Hozirgi qo'shimcha offset: <b>{settings.MANUAL_VOTE_OFFSET:+d}</b>\n\n"
+            f"<i>(Masalan: +50 yoki -10 deb yozing)</i>",
             parse_mode="HTML"
         )
         await callback.answer()
@@ -313,8 +341,43 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
 
     elif action == "broadcast":
         await state.set_state(AdminBroadcastState.waiting_for_ad_text)
-        await callback.message.answer(f"{emoji_manager.get('speaker')} Guruhlarga yubormoqchi bo'lgan reklama matnini yuboring:", parse_mode="HTML")
+        default_promo = (
+            f"{emoji_manager.get('welcome')} <b>OPENBUDGET RASMIY BOTI</b>\n\n"
+            f"O'z raqamingiz va yaqinlaringiz raqamidan ovoz bering hamda pul mukofotini oling!\n\n"
+            f"🔗 <b>Referal tizimi:</b> Do'stlaringizni taklif qiling va ular bergan har bir ovoz uchun doimiy daromad ishlang!\n\n"
+            f"{emoji_manager.get('finger_down')} <b>Pastdagi tugmani bosib hoziroq boshlang:</b>"
+        )
+        await callback.message.answer(
+            f"{emoji_manager.get('speaker')} Guruhlarga reklama matnini yuboring:\n"
+            f"<i>(Standart minimalist reklamani yuborish uchun <code>1</code> deb yozing)</i>\n\n"
+            f"<b>Standart reklama namunasi:</b>\n{default_promo}",
+            parse_mode="HTML"
+        )
         await callback.answer()
+
+@router.message(AdminVotePriceState.waiting_for_price, F.text)
+async def process_admin_change_vote_price(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    text_val = message.text.strip()
+    if text_val == "/cancel":
+        await state.clear()
+        await message.answer("Bekor qilindi.", parse_mode="HTML")
+        return
+
+    if not text_val.isdigit():
+        await message.answer("⚠️ Iltimos, faqat musbat raqam kiriting (masalan: 25000):", parse_mode="HTML")
+        return
+
+    new_price = int(text_val)
+    settings.DEFAULT_REWARD_PER_VOTE = new_price
+    await state.clear()
+    await message.answer(
+        f"{emoji_manager.get('success')} <b>Ovoz narxi muvaffaqiyatli saqlandi: {new_price:,} UZS</b>",
+        reply_markup=get_admin_dashboard_keyboard(),
+        parse_mode="HTML"
+    )
 
 @router.message(AdminRefBonusState.waiting_for_ref_bonus, F.text)
 async def process_admin_change_ref_bonus(message: Message, state: FSMContext):
@@ -339,6 +402,29 @@ async def process_admin_change_ref_bonus(message: Message, state: FSMContext):
         reply_markup=get_admin_dashboard_keyboard(),
         parse_mode="HTML"
     )
+
+@router.message(AdminVoteAdjustState.waiting_for_offset, F.text)
+async def process_admin_adjust_votes(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    text_val = message.text.strip()
+    if text_val == "/cancel":
+        await state.clear()
+        await message.answer("Bekor qilindi.", parse_mode="HTML")
+        return
+
+    try:
+        val = int(text_val)
+        settings.MANUAL_VOTE_OFFSET += val
+        await state.clear()
+        await message.answer(
+            f"{emoji_manager.get('success')} <b>Ovozlar statistikasi o'zgartirildi ({val:+d})!</b>\nJami qo'shimcha offset: <b>{settings.MANUAL_VOTE_OFFSET:+d}</b>",
+            reply_markup=get_admin_dashboard_keyboard(),
+            parse_mode="HTML"
+        )
+    except ValueError:
+        await message.answer("⚠️ Iltimos, musbat yoki manfiy butun raqam kiriting (masalan: +50 yoki -10):", parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("edit_emoji:"))
 async def handle_edit_emoji_click(callback: CallbackQuery, state: FSMContext):
@@ -432,6 +518,14 @@ async def process_admin_group_broadcast(message: Message, state: FSMContext, ses
         await state.clear()
         await message.answer("Reklama bekor qilindi.", parse_mode="HTML")
         return
+
+    if ad_text.strip() == "1":
+        ad_text = (
+            f"{emoji_manager.get('welcome')} <b>OPENBUDGET RASMIY BOTI</b>\n\n"
+            f"O'z raqamingiz va yaqinlaringiz raqamidan ovoz bering hamda pul mukofotini oling!\n\n"
+            f"🔗 <b>Referal tizimi:</b> Do'stlaringizni taklif qiling va ular bergan har bir ovoz uchun doimiy daromad ishlang!\n\n"
+            f"{emoji_manager.get('finger_down')} <b>Pastdagi tugmani bosib hoziroq boshlang:</b>"
+        )
 
     stmt = select(Group).where(Group.is_active == True)
     res = await session.execute(stmt)
