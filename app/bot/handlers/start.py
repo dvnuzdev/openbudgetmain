@@ -63,16 +63,16 @@ async def cmd_start(message: Message, command: CommandObject, session: AsyncSess
         if not is_adm:
             welcome_text = (
                 f"{emoji_manager.get('welcome')} <b>Assalomu alaykum, {html.escape(full_name)}!</b>\n\n"
-                f"<blockquote>{emoji_manager.get('building')} <b>OpenBudget rasmiy botiga xush kelibsiz.</b>\n\n"
+                f"<blockquote>{emoji_manager.get('building')} <b>OpenBudget Rasmiy Botiga Xush Kelibsiz!</b>\n\n"
                 f"{emoji_manager.get('timer')} <b>Ovoz berish boshlanishiga:</b> <code>{c_str}</code> qoldi!\n\n"
-                f"{emoji_manager.get('speaker')} OpenBudget mavsumi boshlanishi bilan botimiz to'liq ishga tushadi.</blockquote>\n\n"
-                f"{emoji_manager.get('finger_down')} Kerakli bo'limni tanlang:"
+                f"{emoji_manager.get('speaker')} Botimiz orqali OpenBudget loyihasiga ovoz bering va pul mukofotini kartangizga oling.</blockquote>\n\n"
+                f"{emoji_manager.get('finger_down')} <b>Pastdagi menyudan kerakli bo'limni tanlang:</b>"
             )
         else:
             welcome_text = (
                 f"{emoji_manager.get('admin')} <b>Assalomu alaykum, {html.escape(full_name)} (ADMIN)!</b>\n\n"
-                f"<blockquote>{emoji_manager.get('admin')} Admin paneldan bemalol foydalanishingiz mumkin.</blockquote>\n\n"
-                f"{emoji_manager.get('finger_down')} Menyudan bo'limni tanlang:"
+                f"<blockquote>{emoji_manager.get('admin')} Admin paneldan tizimni to'liq boshqarishingiz mumkin.</blockquote>\n\n"
+                f"{emoji_manager.get('finger_down')} <b>Menyudan bo'limni tanlang:</b>"
             )
 
         await message.answer(
@@ -104,22 +104,36 @@ async def show_public_general_stats(message: Message, session: AsyncSession):
     res = await session.execute(stmt)
     rows = res.all()
 
-    # Calculate user displayed votes including manual offsets
     user_stats_list = []
+    total_system_votes = 0
+
     for r in rows:
         disp_votes = max(0, r.real_vote_count + (r.manual_votes_offset or 0))
         user_stats_list.append((r.full_name, disp_votes))
+        total_system_votes += disp_votes
 
-    # Sort descending by displayed vote count
+    total_system_votes = max(0, total_system_votes + settings.MANUAL_VOTE_OFFSET)
     user_stats_list.sort(key=lambda x: x[1], reverse=True)
 
+    e_votes = emoji_manager.get('votes_icon')
+    e_paid = emoji_manager.get('paid_icon')
+
     if not user_stats_list:
-        stats_text = f"{emoji_manager.get('votes_icon')} <b>UMUMIY OVOZLAR STATISTIKASI:</b>\n\n<i>Hali ovozlar berilmagan.</i>"
+        stats_text = (
+            f"{e_votes} <b>UMUMIY OVOZLAR STATISTIKASI:</b>\n\n"
+            f"{e_paid} <b>Jami yig'ilgan ovozlar:</b> <b>0 ta</b>\n\n"
+            f"<i>Hali ovozlar berilmagan.</i>"
+        )
     else:
-        stats_text = f"{emoji_manager.get('votes_icon')} <b>UMUMIY OVOZLAR STATISTIKASI:</b>\n\n"
+        stats_text = (
+            f"{e_votes} <b>UMUMIY OVOZLAR STATISTIKASI:</b>\n\n"
+            f"{e_paid} <b>Jami yig'ilgan ovozlar:</b> <b>{total_system_votes} ta</b>\n\n"
+            f"<blockquote>"
+        )
         for idx, (name_raw, count) in enumerate(user_stats_list, 1):
             name = html.escape(name_raw or f"Foydalanuvchi_{idx}")
             stats_text += f"{idx}. <b>{name}</b> — <b>{count} ta</b> ovoz\n"
+        stats_text += "</blockquote>"
 
     await message.answer(stats_text, parse_mode="HTML")
 
@@ -134,13 +148,13 @@ async def show_help_rules(message: Message):
     tmr = emoji_manager.get('timer')
 
     text = (
-        f"{help_ico} <b>BOT QOIDALARI & YORDAM:</b>\n\n"
-        f"<blockquote>{tmr} <b>Boshlanishiga:</b> <code>{c_str}</code> qoldi!\n\n"
-        f"{n1} OpenBudget boshlangach 'Ovoz berish' tugmasini bosing.\n"
-        f"{n2} SMS kodni kiriting va ovozingizni tasdiqlang.\n"
-        f"{n3} Pul mukofotini kartangizga yechib oling.</blockquote>\n\n"
-        f"{spk} Barcha to'lovlar rasmiy kanalimizda e'lon qilinadi.\n\n"
-        f"<blockquote>💬 <b>Savollar bo'yicha murojaat uchun pastdagi tugmalardan foydalaning!</b></blockquote>"
+        f"{help_ico} <b>BOT QOIDALARI VA YO'RIQNOMA:</b>\n\n"
+        f"<blockquote>{tmr} <b>Ovoz berish boshlanishiga:</b> <code>{c_str}</code> qoldi!\n\n"
+        f"{n1} OpenBudget rasmiy saytidan loyihamizga ovoz bering.\n"
+        f"{n2} Ovoz bergan raqamingiz va pul tushadigan kartangizni botga kiring.\n"
+        f"{n3} Adminlar ovozingizni tekshirib, pulni kartangizga o'tkazib beradi.</blockquote>\n\n"
+        f"{spk} Barcha to'lov cheklari rasmiy to'lovlar kanalimizda e'lon boriladi.\n\n"
+        f"<blockquote>💬 <b>Savol va takliflar bo'yicha pastdagi admin tugmalaridan foydalaning!</b></blockquote>"
     )
     await message.answer(text, reply_markup=get_help_contacts_keyboard(), parse_mode="HTML")
 
@@ -163,8 +177,6 @@ async def show_referral_link(message: Message, session: AsyncSession):
     res = await session.execute(stmt)
     u = res.scalar_one_or_none()
     count = u.referral_count if u else 0
-
-    c_str, c_html, is_started = get_countdown_info()
 
     text = (
         f"{emoji_manager.get('link')} <b>SHAXSIY TAKLIF HAVOLANGIZ:</b>\n\n"
@@ -193,6 +205,6 @@ async def show_top_referrals(message: Message, session: AsyncSession):
         name = html.escape(u.full_name or f"Foydalanuvchi_{idx}")
         medal = medals[idx - 1] if idx <= 3 else f"{idx}."
         text += f"{medal} <b>{name}</b> — {u.referral_count} ta tasdiqlangan taklif\n"
-    text += "</blockquote>"
+    text += "oste"
 
     await message.answer(text, parse_mode="HTML")

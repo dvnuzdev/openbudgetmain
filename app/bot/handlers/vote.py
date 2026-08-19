@@ -19,12 +19,6 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 router = Router()
 
-MENU_KEYWORDS = [
-    "Ovoz berish", "Boshqa raqamdan ovoz", "Statistikam", "To'lov holati",
-    "To'lovlar kanali", "Mening havolam", "Top Referrallar", "Yordam / Qoidalar",
-    "Admin Panel"
-]
-
 def check_is_admin(user_id: int) -> bool:
     return user_id in settings.admin_id_list
 
@@ -80,15 +74,56 @@ async def process_phone_contact(message: Message, state: FSMContext, session: As
     await handle_voted_phone_submission(message, state, session, raw_phone)
 
 @router.message(VoteStates.waiting_for_phone, F.text)
-async def process_phone_text(message: Message, state: FSMContext, session: AsyncSession):
+async def process_phone_text(message: Message, state: FSMContext, session: AsyncSession, redis: Redis):
     raw_text = message.text.strip() if message.text else ""
+    raw_lower = raw_text.lower()
 
-    # Check if user clicked any main menu item instead of typing phone
-    for kw in MENU_KEYWORDS:
-        if kw.lower() in raw_text.lower():
-            logger.info(f"User clicked menu item '{raw_text}' while in waiting_for_phone state. Clearing state.")
-            await state.clear()
-            return  # Allow other handlers to process the menu command smoothly
+    # Direct routing for menu buttons clicked while in state
+    if "statistika" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_public_general_stats
+        await show_public_general_stats(message, session)
+        return
+
+    if "to'lov holati" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.payout import check_user_payout_status
+        await check_user_payout_status(message, session)
+        return
+
+    if "to'lovlar kanali" in raw_lower or "kanal" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_payout_channel
+        await show_payout_channel(message)
+        return
+
+    if "mening havolam" in raw_lower or "havola" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_referral_link
+        await show_referral_link(message, session)
+        return
+
+    if "top referrallar" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_top_referrals
+        await show_top_referrals(message, session)
+        return
+
+    if "yordam" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_help_rules
+        await show_help_rules(message)
+        return
+
+    if "admin panel" in raw_lower or "admin" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.admin import open_admin_panel
+        await open_admin_panel(message, session, redis)
+        return
+
+    if "bekor qilish" in raw_lower:
+        await cancel_handler(message, state)
+        return
 
     await handle_voted_phone_submission(message, state, session, raw_text)
 
@@ -132,14 +167,55 @@ async def handle_voted_phone_submission(message: Message, state: FSMContext, ses
     )
 
 @router.message(PayoutStates.waiting_for_card, F.chat.type == "private")
-async def process_payout_dest_input(message: Message, state: FSMContext, session: AsyncSession, bot_identifier: str = "bot1"):
+async def process_payout_dest_input(message: Message, state: FSMContext, session: AsyncSession, redis: Redis, bot_identifier: str = "bot1"):
     raw_dest = message.text.strip() if message.text else ""
+    raw_lower = raw_dest.lower()
 
-    # Check if user clicked any main menu item
-    for kw in MENU_KEYWORDS:
-        if kw.lower() in raw_dest.lower():
-            await state.clear()
-            return
+    if "statistika" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_public_general_stats
+        await show_public_general_stats(message, session)
+        return
+
+    if "to'lov holati" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.payout import check_user_payout_status
+        await check_user_payout_status(message, session)
+        return
+
+    if "to'lovlar kanali" in raw_lower or "kanal" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_payout_channel
+        await show_payout_channel(message)
+        return
+
+    if "mening havolam" in raw_lower or "havola" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_referral_link
+        await show_referral_link(message, session)
+        return
+
+    if "top referrallar" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_top_referrals
+        await show_top_referrals(message, session)
+        return
+
+    if "yordam" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_help_rules
+        await show_help_rules(message)
+        return
+
+    if "admin panel" in raw_lower or "admin" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.admin import open_admin_panel
+        await open_admin_panel(message, session, redis)
+        return
+
+    if "bekor qilish" in raw_lower:
+        await cancel_handler(message, state)
+        return
 
     clean_dest = raw_dest.replace(" ", "")
     user_id = message.from_user.id
@@ -207,15 +283,58 @@ async def process_payout_dest_input(message: Message, state: FSMContext, session
         await message.answer(user_ack, reply_markup=get_main_menu_keyboard(is_admin=is_adm), parse_mode="HTML")
 
 @router.message(PayoutStates.waiting_for_card_holder_name, F.chat.type == "private")
-async def process_card_holder_name_input(message: Message, state: FSMContext, session: AsyncSession, bot_identifier: str = "bot1"):
+async def process_card_holder_name_input(message: Message, state: FSMContext, session: AsyncSession, redis: Redis, bot_identifier: str = "bot1"):
     holder_name = message.text.strip() if message.text else ""
+    raw_lower = holder_name.lower()
+
+    if "statistika" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_public_general_stats
+        await show_public_general_stats(message, session)
+        return
+
+    if "to'lov holati" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.payout import check_user_payout_status
+        await check_user_payout_status(message, session)
+        return
+
+    if "to'lovlar kanali" in raw_lower or "kanal" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_payout_channel
+        await show_payout_channel(message)
+        return
+
+    if "mening havolam" in raw_lower or "havola" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_referral_link
+        await show_referral_link(message, session)
+        return
+
+    if "top referrallar" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_top_referrals
+        await show_top_referrals(message, session)
+        return
+
+    if "yordam" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.start import show_help_rules
+        await show_help_rules(message)
+        return
+
+    if "admin panel" in raw_lower or "admin" in raw_lower:
+        await state.clear()
+        from app.bot.handlers.admin import open_admin_panel
+        await open_admin_panel(message, session, redis)
+        return
+
+    if "bekor qilish" in raw_lower:
+        await cancel_handler(message, state)
+        return
+
     user_id = message.from_user.id
     is_adm = check_is_admin(user_id)
-
-    for kw in MENU_KEYWORDS:
-        if kw.lower() in holder_name.lower():
-            await state.clear()
-            return
 
     if len(holder_name) < 3:
         await message.answer(f"{emoji_manager.get('warning')} Iltimos, karta egasining to'liq ism va familiyasini kiriting (masalan: ALISHER NAVOIY):", reply_markup=get_cancel_keyboard(), parse_mode="HTML")
