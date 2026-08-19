@@ -4,7 +4,8 @@ from app.services.emoji_manager import emoji_manager
 def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Returns main menu reply keyboard with Left buttons = Green (success), Right buttons = Blue (primary)."""
     def make_btn(text: str, key: str, style: str = None) -> KeyboardButton:
-        kwargs = {"text": text}
+        plain_emoji = emoji_manager.get_plain(key)
+        kwargs = {"text": f"{plain_emoji} {text}"}
         if style:
             kwargs["style"] = style
         emoji_id = emoji_manager.get_emoji_id(key)
@@ -12,7 +13,6 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
             kwargs["icon_custom_emoji_id"] = emoji_id
         return KeyboardButton(**kwargs)
 
-    # Left side = green ("success"), Right side = blue ("primary")
     buttons = [
         [
             make_btn("Ovoz berish", "vote", style="success"),
@@ -43,7 +43,8 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
 
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     """Returns red cancel reply keyboard for FSM states."""
-    kwargs = {"text": "Bekor qilish", "style": "danger"}
+    plain_cancel = emoji_manager.get_plain("cancel")
+    kwargs = {"text": f"{plain_cancel} Bekor qilish", "style": "danger"}
     emoji_id = emoji_manager.get_emoji_id("cancel")
     if emoji_id:
         kwargs["icon_custom_emoji_id"] = emoji_id
@@ -58,7 +59,8 @@ def get_cancel_keyboard() -> ReplyKeyboardMarkup:
 
 def get_phone_request_keyboard() -> ReplyKeyboardMarkup:
     """Returns contact share reply keyboard with styled red cancel button."""
-    kwargs_cancel = {"text": "Bekor qilish", "style": "danger"}
+    plain_cancel = emoji_manager.get_plain("cancel")
+    kwargs_cancel = {"text": f"{plain_cancel} Bekor qilish", "style": "danger"}
     emoji_id = emoji_manager.get_emoji_id("cancel")
     if emoji_id:
         kwargs_cancel["icon_custom_emoji_id"] = emoji_id
@@ -66,7 +68,7 @@ def get_phone_request_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text="Telefon raqamni yuborish", request_contact=True, style="success")
+                KeyboardButton(text="📱 Telefon raqamni yuborish", request_contact=True, style="success")
             ],
             [
                 KeyboardButton(**kwargs_cancel)

@@ -14,14 +14,16 @@ router = Router()
 
 def get_group_promo_keyboard(bot_username: str) -> InlineKeyboardMarkup:
     """Returns promotional inline keyboard in Premium format with custom emoji icon and success style."""
+    vote_emoji_id = emoji_manager.get_emoji_id("vote")
+    plain_vote = emoji_manager.get_plain("vote")
+
     kwargs = {
-        "text": "🤖 Botga O'tish hamda Ovoz Berish",
+        "text": f"{plain_vote} Botga O'tish hamda Ovoz Berish",
         "url": f"https://t.me/{bot_username}?start=group_promo",
         "style": "success"
     }
-    emoji_id = emoji_manager.get_emoji_id("vote")
-    if emoji_id:
-        kwargs["icon_custom_emoji_id"] = emoji_id
+    if vote_emoji_id:
+        kwargs["icon_custom_emoji_id"] = vote_emoji_id
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
