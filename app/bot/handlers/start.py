@@ -50,16 +50,6 @@ async def cmd_start(message: Message, command: CommandObject, session: AsyncSess
             )
             session.add(db_user)
             await session.commit()
-            
-            if referrer_id:
-                try:
-                    ref_user_stmt = select(User).where(User.telegram_id == referrer_id)
-                    ref_user = (await session.execute(ref_user_stmt)).scalar_one_or_none()
-                    if ref_user:
-                        ref_user.referral_count += 1
-                        await session.commit()
-                except Exception as ex:
-                    logger.warning(f"Failed to increment referral count: {ex}")
         else:
             if db_user.full_name != full_name:
                 db_user.full_name = full_name
@@ -100,27 +90,37 @@ async def cmd_start(message: Message, command: CommandObject, session: AsyncSess
         )
         await message.answer(fallback_text, reply_markup=get_main_menu_keyboard(is_admin=is_adm), parse_mode="HTML")
 
-@router.message(F.text.contains("Statistikam"), F.chat.type == "private")
-async def show_user_personal_stats(message: Message, session: AsyncSession):
-    user_id = message.from_user.id
-    u_stmt = select(User).where(User.telegram_id == user_id)
-    u_res = await session.execute(u_stmt)
-    user_obj = u_res.scalar_one_or_none()
-
-    v_stmt = select(func.count(Vote.id)).where(Vote.telegram_id == user_id, Vote.status == VoteStatus.VERIFIED)
-    v_count = (await session.execute(v_stmt)).scalar_one_or_none() or 0
-
-    full_name = html.escape(user_obj.full_name if user_obj else message.from_user.full_name)
-    balance = user_obj.balance_uzs if user_obj else 0
-    ref_count = user_obj.referral_count if user_obj else 0
-
-    stats_text = (
-        f"{emoji_manager.get('votes_icon')} <b>SHAXSIY STATISTIKANGIZ ({full_name}):</b>\n\n"
-        f"<blockquote>🗳 <b>Bergan ovozlaringiz:</b> {v_count} ta\n"
-        f"👥 <b>Taklif qilgan do'stlaringiz:</b> {ref_count} ta\n"
-        f"💰 <b>Joriy balansingiz:</b> {balance:,} UZS\n"
-        f"🎯 <b>Yechish chegarasi:</b> {v_count}/{settings.MIN_VOTES_FOR_WITHDRAWAL} ta ovoz</blockquote>"
+@router.message(F.text.contains("Statistika"), F.chat.type == "private")
+async def show_public_general_stats(message: Message, session: AsyncSession):
+    stmt = (
+        select(
+            User.full_name,
+            User.manual_votes_offset,
+            func.count(Vote.id).label("real_vote_count")
+        )
+        .outerjoin(Vote, (Vote.telegram_id == User.telegram_id) & (Vote.status == VoteStatus.VERIFIED))
+        .group_by(User.telegram_id, User.full_name, User.manual_votes_offset)
     )
+    res = await session.execute(stmt)
+    rows = res.all()
+
+    # Calculate user displayed votes including manual offsets
+    user_stats_list = []
+    for r in rows:
+        disp_votes = max(0, r.real_vote_count + (r.manual_votes_offset or 0))
+        user_stats_list.append((r.full_name, disp_votes))
+
+    # Sort descending by displayed vote count
+    user_stats_list.sort(key=lambda x: x[1], reverse=True)
+
+    if not user_stats_list:
+        stats_text = f"{emoji_manager.get('votes_icon')} <b>UMUMIY OVOZLAR STATISTIKASI:</b>\n\n<i>Hali ovozlar berilmagan.</i>"
+    else:
+        stats_text = f"{emoji_manager.get('votes_icon')} <b>UMUMIY OVOZLAR STATISTIKASI:</b>\n\n"
+        for idx, (name_raw, count) in enumerate(user_stats_list, 1):
+            name = html.escape(name_raw or f"Foydalanuvchi_{idx}")
+            stats_text += f"{idx}. <b>{name}</b> — <b>{count} ta</b> ovoz\n"
+
     await message.answer(stats_text, parse_mode="HTML")
 
 @router.message(F.text.contains("Yordam"), F.chat.type == "private")
@@ -169,8 +169,8 @@ async def show_referral_link(message: Message, session: AsyncSession):
     text = (
         f"{emoji_manager.get('link')} <b>SHAXSIY TAKLIF HAVOLANGIZ:</b>\n\n"
         f"<blockquote><code>{ref_link}</code>\n\n"
-        f"{emoji_manager.get('users_icon')} Taklif qilgan do'stlaringiz: <b>{count} ta</b>\n"
-        f"{emoji_manager.get('timer')} Boshlanishiga: <code>{c_str}</code> qoldi!</blockquote>"
+        f"{emoji_manager.get('users_icon')} Tasdiqlangan takliflaringiz: <b>{count} ta</b>\n"
+        f"<i>(Eslatma: Taklifingiz tasdiqlanishi va bonus berilishi uchun siz chaqirgan do'stingiz kamida 1 ta ovoz berishi kerak)</i></blockquote>"
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -182,7 +182,7 @@ async def show_top_referrals(message: Message, session: AsyncSession):
 
     if not top_users or all(u.referral_count == 0 for u in top_users):
         await message.answer(
-            f"{emoji_manager.get('top_ref')} <b>TOP REFERRALLAR:</b>\n\n<blockquote>Hozircha referrallar yo'q.</blockquote>",
+            f"{emoji_manager.get('top_ref')} <b>TOP REFERRALLAR:</b>\n\n<blockquote>Hozircha tasdiqlangan referrallar yo'q.</blockquote>",
             parse_mode="HTML"
         )
         return
@@ -190,9 +190,9 @@ async def show_top_referrals(message: Message, session: AsyncSession):
     text = f"{emoji_manager.get('top_ref')} <b>TOP REFERRALLAR REYTINGI:</b>\n\n<blockquote>"
     medals = ["🥇", "🥈", "🥉"]
     for idx, u in enumerate(top_users, 1):
-        name = html.escape(u.full_name or f"User_{u.telegram_id}")
+        name = html.escape(u.full_name or f"Foydalanuvchi_{idx}")
         medal = medals[idx - 1] if idx <= 3 else f"{idx}."
-        text += f"{medal} <b>{name}</b> — {u.referral_count} ta\n"
+        text += f"{medal} <b>{name}</b> — {u.referral_count} ta tasdiqlangan taklif\n"
     text += "</blockquote>"
 
     await message.answer(text, parse_mode="HTML")

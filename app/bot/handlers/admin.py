@@ -43,6 +43,10 @@ class AdminRefBonusState(StatesGroup):
 class AdminVoteAdjustState(StatesGroup):
     waiting_for_offset = State()
 
+class AdminUserVoteAdjustState(StatesGroup):
+    waiting_for_user_id = State()
+    waiting_for_user_offset = State()
+
 class AdminRejectState(StatesGroup):
     waiting_for_reason = State()
 
@@ -60,7 +64,11 @@ async def build_admin_stats_text(session: AsyncSession, redis: Redis, bot_identi
 
     total_votes_stmt = select(func.count(Vote.id)).where(Vote.status == VoteStatus.VERIFIED)
     raw_votes = (await session.execute(total_votes_stmt)).scalar_one_or_none() or 0
-    total_votes = max(0, raw_votes + settings.MANUAL_VOTE_OFFSET)
+
+    user_offsets_stmt = select(func.sum(User.manual_votes_offset))
+    user_offsets = (await session.execute(user_offsets_stmt)).scalar_one_or_none() or 0
+
+    total_votes = max(0, raw_votes + settings.MANUAL_VOTE_OFFSET + user_offsets)
 
     total_pending_stmt = select(func.count(PayoutTicket.id)).where(PayoutTicket.status == TicketStatus.PENDING)
     total_pending = (await session.execute(total_pending_stmt)).scalar_one_or_none() or 0
@@ -116,96 +124,6 @@ async def open_admin_panel(message: Message, session: AsyncSession, redis: Redis
     stats_text = await build_admin_stats_text(session, redis, bot_identifier)
     await message.answer(stats_text, reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
 
-@router.message(Command("tickets"))
-@router.message(Command("pending"))
-async def handle_pending_tickets_cmd(message: Message, session: AsyncSession):
-    if not is_admin(message.from_user.id):
-        return
-
-    stmt = select(PayoutTicket).where(PayoutTicket.status == TicketStatus.PENDING).order_by(PayoutTicket.created_at.asc()).limit(10)
-    res = await session.execute(stmt)
-    tickets = res.scalars().all()
-
-    if not tickets:
-        await message.answer(f"{emoji_manager.get('success')} Kutilayotgan zayavkalar yo'q.", parse_mode="HTML")
-        return
-
-    await message.answer(f"{emoji_manager.get('warning')} <b>KUTILAYOTGAN ZAYAVKALAR:</b>", parse_mode="HTML")
-
-    for t in tickets:
-        user_stmt = select(User).where(User.telegram_id == t.telegram_id)
-        u_res = await session.execute(user_stmt)
-        user_obj = u_res.scalar_one_or_none()
-
-        raw_name = user_obj.full_name if (user_obj and user_obj.full_name) else "User"
-        safe_name = html.escape(raw_name)
-        user_mention = f'<a href="tg://user?id={t.telegram_id}">{safe_name}</a>'
-        user_uname = f"@{user_obj.username}" if (user_obj and user_obj.username) else "Yo'q"
-        p_type = t.payout_type.value if hasattr(t.payout_type, 'value') else t.payout_type
-        holder = f"\n{emoji_manager.get('user_admin')} Egasi: <b>{html.escape(t.card_holder_name)}</b>" if t.card_holder_name else ""
-
-        ticket_info = (
-            f"{emoji_manager.get('tickets_icon')} <b>#{t.ticket_code}</b>\n"
-            f"{emoji_manager.get('user_admin')} User: {user_mention} ({user_uname} | <code>{t.telegram_id}</code>)\n"
-            f"{emoji_manager.get('balance')} Rekvizit: <code>{t.destination}</code> ({p_type}){holder}\n"
-            f"{emoji_manager.get('paid_icon')} Summa: <b>{t.amount_uzs:,} UZS</b>\n"
-            f"{emoji_manager.get('calendar')} Sana: {t.created_at.strftime('%m-%d %H:%M')}"
-        )
-        await message.answer(ticket_info, reply_markup=get_admin_ticket_keyboard(t.id), parse_mode="HTML")
-
-@router.callback_query(F.data.startswith("admin_upload_receipt:"))
-async def handle_admin_upload_receipt_click(callback: CallbackQuery, state: FSMContext):
-    if not is_admin(callback.from_user.id):
-        await callback.answer("⚠️ Siz admin emassiz!", show_alert=True)
-        return
-
-    ticket_id = int(callback.data.split(":")[1])
-    await state.update_data(receipt_target_ticket_id=ticket_id)
-    await state.set_state(AdminReceiptState.waiting_for_photo)
-
-    await callback.message.reply(f"{emoji_manager.get('tickets_icon')} Chek rasmini yuboring (/cancel - bekor qilish):", parse_mode="HTML")
-    await callback.answer()
-
-@router.message(AdminReceiptState.waiting_for_photo, F.photo)
-async def process_admin_receipt_photo_upload(message: Message, state: FSMContext, session: AsyncSession):
-    if not is_admin(message.from_user.id):
-        return
-
-    data = await state.get_data()
-    ticket_id = data.get("receipt_target_ticket_id")
-
-    stmt = select(PayoutTicket).where(PayoutTicket.id == ticket_id)
-    res = await session.execute(stmt)
-    ticket = res.scalar_one_or_none()
-
-    if not ticket:
-        await message.answer(f"{emoji_manager.get('danger')} Zayavka topilmadi.", parse_mode="HTML")
-        await state.clear()
-        return
-
-    photo_file_id = message.photo[-1].file_id
-
-    try:
-        user_caption = (
-            f"{emoji_manager.get('success')} <b>TO'LOV CHEKI KELDI!</b>\n\n"
-            f"{emoji_manager.get('tickets_icon')} Kodi: <code>{ticket.ticket_code}</code>\n"
-            f"{emoji_manager.get('balance')} Rekvizit: <code>{ticket.destination}</code>\n"
-            f"{emoji_manager.get('paid_icon')} Admin to'lov chekini tasdiqladi."
-        )
-        await message.bot.send_photo(
-            chat_id=ticket.telegram_id,
-            photo=photo_file_id,
-            caption=user_caption,
-            reply_markup=get_payout_proof_channel_keyboard(),
-            parse_mode="HTML"
-        )
-        await message.answer(f"{emoji_manager.get('success')} Chek foydalanuvchiga yuborildi (ID: <code>{ticket.telegram_id}</code>).", parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"Failed to send receipt photo to user {ticket.telegram_id}: {e}")
-        await message.answer(f"{emoji_manager.get('danger')} Xatolik: {e}", parse_mode="HTML")
-
-    await state.clear()
-
 @router.callback_query(F.data.startswith("admin_menu:"))
 async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext, session: AsyncSession, redis: Redis, bot_identifier: str = "bot1"):
     if not is_admin(callback.from_user.id):
@@ -224,25 +142,41 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
             select(
                 User.telegram_id,
                 User.full_name,
-                User.username,
-                func.count(Vote.id).label("vote_count")
+                User.manual_votes_offset,
+                func.count(Vote.id).label("real_vote_count")
             )
             .outerjoin(Vote, (Vote.telegram_id == User.telegram_id) & (Vote.status == VoteStatus.VERIFIED))
-            .group_by(User.telegram_id, User.full_name, User.username)
-            .order_by(desc("vote_count"), User.telegram_id)
+            .group_by(User.telegram_id, User.full_name, User.manual_votes_offset)
         )
         res = await session.execute(stmt)
-        users_votes = res.all()
+        rows = res.all()
 
-        if not users_votes:
+        user_stats_list = []
+        for r in rows:
+            disp_votes = max(0, r.real_vote_count + (r.manual_votes_offset or 0))
+            user_stats_list.append((r.full_name, disp_votes, r.telegram_id))
+
+        user_stats_list.sort(key=lambda x: x[1], reverse=True)
+
+        if not user_stats_list:
             text = f"{emoji_manager.get('votes_icon')} <b>FOYDALANUVCHILAR OVOZLAR STATISTIKASI:</b>\n\n<i>Foydalanuvchilar topilmadi.</i>"
         else:
             text = f"{emoji_manager.get('votes_icon')} <b>FOYDALANUVCHILAR OVOZLAR STATISTIKASI:</b>\n\n"
-            for idx, row in enumerate(users_votes, 1):
-                name = html.escape(row.full_name or f"User_{row.telegram_id}")
-                text += f"{idx}. <b>{name}</b> (<code>{row.telegram_id}</code>) — <b>{row.vote_count} ta</b> ovoz\n"
+            for idx, (name_raw, count, t_id) in enumerate(user_stats_list, 1):
+                name = html.escape(name_raw or f"Foydalanuvchi_{idx}")
+                text += f"{idx}. <b>{name}</b> — <b>{count} ta</b> ovoz\n"
 
         await callback.message.edit_text(text, reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
+        await callback.answer()
+
+    elif action == "adjust_votes":
+        await state.set_state(AdminUserVoteAdjustState.waiting_for_user_id)
+        await callback.message.answer(
+            f"👤 <b>Aynan qaysi foydalanuvchiga ovoz qo'shmoqchisiz?</b>\n\n"
+            f"Foydalanuvchining <b>Telegram ID</b> raqamini kiriting (masalan: <code>6734269605</code>):\n"
+            f"<i>(Aktiv foydalanuvchi bo'lishi kerak. Bekor qilish uchun /cancel deb yozing)</i>",
+            parse_mode="HTML"
+        )
         await callback.answer()
 
     elif action == "emojis":
@@ -279,16 +213,6 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
             f"🎁 <b>Har bir tasdiqlangan ovoz uchun Referal Bonus summasini kiriting (UZS):</b>\n"
             f"Hozirgi bonus: <b>{settings.REFERRAL_BONUS_PER_VOTE:,} UZS</b>\n\n"
             f"<i>(Masalan: 5000 deb yozing, o'chirish uchun 0 kiriting)</i>",
-            parse_mode="HTML"
-        )
-        await callback.answer()
-
-    elif action == "adjust_votes":
-        await state.set_state(AdminVoteAdjustState.waiting_for_offset)
-        await callback.message.answer(
-            f"📊 <b>Ovozlar statistikasi soniga qo'shish yoki ayirish:</b>\n"
-            f"Hozirgi qo'shimcha offset: <b>{settings.MANUAL_VOTE_OFFSET:+d}</b>\n\n"
-            f"<i>(Masalan: +50 yoki -10 deb yozing)</i>",
             parse_mode="HTML"
         )
         await callback.answer()
@@ -360,7 +284,7 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
         text = f"{emoji_manager.get('top_ref')} <b>TOP REFERRALLAR:</b>\n\n"
         for idx, u in enumerate(top_users, 1):
             name = html.escape(u.full_name or f"User_{u.telegram_id}")
-            text += f"{idx}. <b>{name}</b> — {u.referral_count} ta taklif\n"
+            text += f"{idx}. <b>{name}</b> — {u.referral_count} ta tasdiqlangan taklif\n"
 
         await callback.message.edit_text(text, reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
         await callback.answer()
@@ -380,6 +304,79 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
             parse_mode="HTML"
         )
         await callback.answer()
+
+@router.message(AdminUserVoteAdjustState.waiting_for_user_id, F.text)
+async def process_admin_user_vote_adjust_id(message: Message, state: FSMContext, session: AsyncSession):
+    if not is_admin(message.from_user.id):
+        return
+
+    text_val = message.text.strip()
+    if text_val == "/cancel":
+        await state.clear()
+        await message.answer("Bekor qilindi.", parse_mode="HTML")
+        return
+
+    if not text_val.isdigit():
+        await message.answer("⚠️ Iltimos, faqat musbat raqamdan iborat Telegram ID kiriting (masalan: 6734269605):", parse_mode="HTML")
+        return
+
+    target_id = int(text_val)
+    stmt = select(User).where(User.telegram_id == target_id)
+    res = await session.execute(stmt)
+    user_obj = res.scalar_one_or_none()
+
+    if not user_obj:
+        await message.answer(f"⚠️ Telegram ID <code>{target_id}</code> bo'lgan foydalanuvchi bazadan topilmadi. Qayta kiriting:", parse_mode="HTML")
+        return
+
+    await state.update_data(target_adjust_user_id=target_id)
+    await state.set_state(AdminUserVoteAdjustState.waiting_for_user_offset)
+
+    name = html.escape(user_obj.full_name or f"User_{target_id}")
+    await message.answer(
+        f"👤 Tanlangan foydalanuvchi: <b>{name}</b> (ID: <code>{target_id}</code>)\n"
+        f"Hozirgi qo'shimcha offseti: <b>{user_obj.manual_votes_offset:+d}</b>\n\n"
+        f"<b>Qancha ovoz qo'shmoqchisiz yoki ayirmoqchisiz?</b>\n"
+        f"<i>(Masalan: +5 deb yozsangiz 5 ta ovoz qo'shiladi, -2 desangiz 2 ta ayiriladi)</i>",
+        parse_mode="HTML"
+    )
+
+@router.message(AdminUserVoteAdjustState.waiting_for_user_offset, F.text)
+async def process_admin_user_vote_adjust_offset(message: Message, state: FSMContext, session: AsyncSession):
+    if not is_admin(message.from_user.id):
+        return
+
+    text_val = message.text.strip()
+    if text_val == "/cancel":
+        await state.clear()
+        await message.answer("Bekor qilindi.", parse_mode="HTML")
+        return
+
+    try:
+        offset_val = int(text_val)
+        data = await state.get_data()
+        target_id = data.get("target_adjust_user_id")
+
+        stmt = select(User).where(User.telegram_id == target_id)
+        res = await session.execute(stmt)
+        user_obj = res.scalar_one_or_none()
+
+        if user_obj:
+            user_obj.manual_votes_offset = (user_obj.manual_votes_offset or 0) + offset_val
+            await session.commit()
+            name = html.escape(user_obj.full_name or f"User_{target_id}")
+            await state.clear()
+            await message.answer(
+                f"{emoji_manager.get('success')} <b>{name}</b> (ID: <code>{target_id}</code>) ning ovozlari soniga <b>{offset_val:+d}</b> ta qo'shildi!\n\n"
+                f"Statistikada ushbu foydalanuvchining ovozlari mos ravishda o'zgardi.",
+                reply_markup=get_admin_dashboard_keyboard(),
+                parse_mode="HTML"
+            )
+        else:
+            await state.clear()
+            await message.answer("Xatolik: Foydalanuvchi topilmadi.", parse_mode="HTML")
+    except ValueError:
+        await message.answer("⚠️ Iltimos, musbat yoki manfiy raqam kiriting (masalan: +5 yoki -2):", parse_mode="HTML")
 
 @router.message(AdminVotePriceState.waiting_for_price, F.text)
 async def process_admin_change_vote_price(message: Message, state: FSMContext):
@@ -428,29 +425,6 @@ async def process_admin_change_ref_bonus(message: Message, state: FSMContext):
         reply_markup=get_admin_dashboard_keyboard(),
         parse_mode="HTML"
     )
-
-@router.message(AdminVoteAdjustState.waiting_for_offset, F.text)
-async def process_admin_adjust_votes(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id):
-        return
-
-    text_val = message.text.strip()
-    if text_val == "/cancel":
-        await state.clear()
-        await message.answer("Bekor qilindi.", parse_mode="HTML")
-        return
-
-    try:
-        val = int(text_val)
-        settings.MANUAL_VOTE_OFFSET += val
-        await state.clear()
-        await message.answer(
-            f"{emoji_manager.get('success')} <b>Ovozlar statistikasi o'zgartirildi ({val:+d})!</b>\nJami qo'shimcha offset: <b>{settings.MANUAL_VOTE_OFFSET:+d}</b>",
-            reply_markup=get_admin_dashboard_keyboard(),
-            parse_mode="HTML"
-        )
-    except ValueError:
-        await message.answer("⚠️ Iltimos, musbat yoki manfiy butun raqam kiriting (masalan: +50 yoki -10):", parse_mode="HTML")
 
 @router.callback_query(F.data.startswith("edit_emoji:"))
 async def handle_edit_emoji_click(callback: CallbackQuery, state: FSMContext):

@@ -38,6 +38,7 @@ class User(Base):
     referrer_id = Column(BigInteger, ForeignKey("users.telegram_id"), nullable=True, index=True)
     referral_count = Column(Integer, default=0)
     referral_earnings_uzs = Column(BigInteger, default=0)
+    manual_votes_offset = Column(Integer, default=0)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 

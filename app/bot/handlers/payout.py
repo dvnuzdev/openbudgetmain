@@ -29,18 +29,28 @@ async def get_user_verified_vote_count(session: AsyncSession, telegram_id: int) 
 async def handle_payout_type_choice(callback: CallbackQuery, state: FSMContext, session: AsyncSession):
     user_id = callback.from_user.id
 
-    # Minimum 5-vote withdrawal constraint check
-    if not check_is_admin(user_id):
+    u_stmt = select(User).where(User.telegram_id == user_id)
+    u_res = await session.execute(u_stmt)
+    user_obj = u_res.scalar_one_or_none()
+
+    balance = user_obj.balance_uzs if user_obj else 0
+    ref_earnings = user_obj.referral_earnings_uzs if user_obj else 0
+
+    # Referral bonus withdrawal restriction check (Requires at least 5 verified votes)
+    if not check_is_admin(user_id) and ref_earnings > 0:
         v_count = await get_user_verified_vote_count(session, user_id)
         min_required = settings.MIN_VOTES_FOR_WITHDRAWAL
         if v_count < min_required:
-            alert_text = (
-                f"⚠️ REFERAL VA MUKOFOT PULINI YECHIB OLISH CHEKLOVI!\n\n"
-                f"Pulni kartangizga yechib olish uchun kamida {min_required} ta ovoz bergan bo'lishingiz kerak!\n\n"
-                f"📊 Siz bergan ovozlar: {v_count} / {min_required} ta"
-            )
-            await callback.answer(alert_text, show_alert=True)
-            return
+            vote_earnings = max(0, balance - ref_earnings)
+            if vote_earnings <= 0:
+                alert_text = (
+                    f"⚠️ REFERAL BONUSINI YECHIB OLISH CHEKLOVI!\n\n"
+                    f"Referal bonuslarini kartangizga yechib olish uchun kamida {min_required} ta ovoz bergan bo'lishingiz kerak!\n\n"
+                    f"📊 Siz bergan ovozlar: {v_count} / {min_required} ta\n"
+                    f"<i>(Oddiy bergan ovozlaringiz pulini esa darhol yechib olishingiz mumkin)</i>"
+                )
+                await callback.answer(alert_text, show_alert=True)
+                return
 
     parts = callback.data.split(":")
     p_type = parts[1] # 'card' or 'phone'
@@ -191,6 +201,7 @@ async def check_user_payout_status(message: Message, session: AsyncSession):
     user_obj = u_res.scalar_one_or_none()
 
     balance = user_obj.balance_uzs if user_obj else 0
+    ref_earnings = user_obj.referral_earnings_uzs if user_obj else 0
     v_count = await get_user_verified_vote_count(session, user_id)
 
     stmt = select(PayoutTicket).where(PayoutTicket.telegram_id == user_id).order_by(PayoutTicket.created_at.desc()).limit(5)
@@ -198,8 +209,9 @@ async def check_user_payout_status(message: Message, session: AsyncSession):
     tickets = res.scalars().all()
 
     text = f"{emoji_manager.get('balance')} <b>SIZNING BALANSINGIZ VA ZAYAVKALARINGIZ:</b>\n\n"
-    text += f"{emoji_manager.get('paid_icon')} <b>Yechib olinadigan Balans: {balance:,} UZS</b>\n"
-    text += f"{emoji_manager.get('vote')} <b>Siz bergan ovozlar: {v_count} / {settings.MIN_VOTES_FOR_WITHDRAWAL} ta</b> (Pulni yechish uchun kamida {settings.MIN_VOTES_FOR_WITHDRAWAL} ta ovoz kerak)\n\n"
+    text += f"{emoji_manager.get('paid_icon')} <b>Joriy Balans: {balance:,} UZS</b>\n"
+    text += f"🎁 Referal Bonusi: <b>{ref_earnings:,} UZS</b> (Yechish uchun kamida 5 ta ovoz berish kerak)\n"
+    text += f"{emoji_manager.get('vote')} <b>Siz bergan ovozlar: {v_count} ta</b>\n\n"
 
     if not tickets:
         text += (

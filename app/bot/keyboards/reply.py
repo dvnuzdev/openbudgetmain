@@ -19,7 +19,7 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
             make_btn("Boshqa raqamdan ovoz", "other_phone", style="primary")
         ],
         [
-            make_btn("Statistikam", "votes_icon", style="success"),
+            make_btn("Statistika", "votes_icon", style="success"),
             make_btn("To'lov holati", "balance", style="primary")
         ],
         [
