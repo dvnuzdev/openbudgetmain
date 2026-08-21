@@ -214,17 +214,61 @@ async def process_ticket_action(
         ticket.processed_by_admin_id = admin_telegram_id
         ticket.updated_at = datetime.utcnow()
 
-        # Referral Bonus Payout to inviter upon vote verification
-        if settings.REFERRAL_BONUS_PER_VOTE > 0:
-            user_stmt = select(User).where(User.telegram_id == ticket.telegram_id)
-            u_res = await session.execute(user_stmt)
-            user_obj = u_res.scalar_one_or_none()
-            if user_obj and user_obj.referrer_id:
-                ref_stmt = select(User).where(User.telegram_id == user_obj.referrer_id)
-                r_res = await session.execute(ref_stmt)
-                referrer_obj = r_res.scalar_one_or_none()
-                if referrer_obj:
-                    referrer_obj.balance_uzs += settings.REFERRAL_BONUS_PER_VOTE
+        # 1. Mark or Create Verified Vote for Statistics
+        if ticket.vote_id:
+            v_stmt = select(Vote).where(Vote.id == ticket.vote_id)
+            v_res = await session.execute(v_stmt)
+            vote_obj = v_res.scalar_one_or_none()
+            if vote_obj:
+                vote_obj.status = VoteStatus.VERIFIED
+                vote_obj.verified_at = datetime.utcnow()
+        else:
+            voted_phone = ticket.destination.split("->")[0].strip() if "->" in ticket.destination else ticket.destination
+            
+            v_stmt = select(Vote).where(Vote.voted_phone_number == voted_phone)
+            v_res = await session.execute(v_stmt)
+            existing_vote = v_res.scalar_one_or_none()
+
+            if existing_vote:
+                existing_vote.status = VoteStatus.VERIFIED
+                existing_vote.verified_at = datetime.utcnow()
+                ticket.vote_id = existing_vote.id
+            else:
+                new_vote = Vote(
+                    telegram_id=ticket.telegram_id,
+                    voted_phone_number=voted_phone,
+                    openbudget_project_id=settings.OPENBUDGET_PROJECT_ID,
+                    status=VoteStatus.VERIFIED,
+                    verified_at=datetime.utcnow(),
+                    bot_identifier=ticket.bot_identifier or "bot1"
+                )
+                session.add(new_vote)
+                await session.flush()
+                ticket.vote_id = new_vote.id
+
+        # 2. Referral Bonus Payout & Referral Count Increment to inviter
+        user_stmt = select(User).where(User.telegram_id == ticket.telegram_id)
+        u_res = await session.execute(user_stmt)
+        user_obj = u_res.scalar_one_or_none()
+
+        if user_obj and user_obj.referrer_id:
+            ref_stmt = select(User).where(User.telegram_id == user_obj.referrer_id)
+            r_res = await session.execute(ref_stmt)
+            referrer_obj = r_res.scalar_one_or_none()
+
+            if referrer_obj:
+                uv_stmt = select(func.count(Vote.id)).where(
+                    Vote.telegram_id == user_obj.telegram_id,
+                    Vote.status == VoteStatus.VERIFIED
+                )
+                user_verified_count = (await session.execute(uv_stmt)).scalar_one_or_none() or 0
+
+                if user_verified_count == 1:
+                    referrer_obj.referral_count += 1
+                    if settings.REFERRAL_BONUS_PER_VOTE > 0:
+                        referrer_obj.referral_earnings_uzs += settings.REFERRAL_BONUS_PER_VOTE
+                        referrer_obj.balance_uzs += settings.REFERRAL_BONUS_PER_VOTE
+
                     if bot:
                         try:
                             ref_msg = (
