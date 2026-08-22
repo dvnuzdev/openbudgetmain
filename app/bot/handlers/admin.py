@@ -1,5 +1,6 @@
 import logging
 import html
+import asyncio
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
@@ -27,6 +28,9 @@ router = Router()
 
 class AdminBroadcastState(StatesGroup):
     waiting_for_ad_text = State()
+
+class AdminUserBroadcastState(StatesGroup):
+    waiting_for_user_ad_message = State()
 
 class AdminReceiptState(StatesGroup):
     waiting_for_photo = State()
@@ -136,6 +140,16 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
         stats_text = await build_admin_stats_text(session, redis, bot_identifier)
         await callback.message.edit_text(stats_text, reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
         await callback.answer("Yangilandi!")
+
+    elif action == "user_broadcast":
+        await state.set_state(AdminUserBroadcastState.waiting_for_user_ad_message)
+        await callback.message.answer(
+            f"{emoji_manager.get('speaker')} <b>BARCHA USERLARGA XABAR YUBORISH:</b>\n\n"
+            f"Foydalanuvchilarga yubormoqchi bo'lgan <b>matn, rasm, video yoki tayyor xabarni</b> shu chatga yuboring!\n"
+            f"<i>(Xabar barcha foydalanuvchilarga xuddi shu ko'rinishda nusxalanib boradi. Bekor qilish uchun <code>/cancel</code> deb yozing)</i>",
+            parse_mode="HTML"
+        )
+        await callback.answer()
 
     elif action == "users_stats":
         stmt = (
@@ -304,6 +318,57 @@ async def handle_admin_dashboard_menu(callback: CallbackQuery, state: FSMContext
             parse_mode="HTML"
         )
         await callback.answer()
+
+@router.message(AdminUserBroadcastState.waiting_for_user_ad_message)
+async def process_admin_user_broadcast_message(message: Message, state: FSMContext, session: AsyncSession):
+    if not is_admin(message.from_user.id):
+        return
+
+    if message.text == "/cancel":
+        await state.clear()
+        await message.answer("Userlarga xabar yuborish bekor qilindi.", reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
+        return
+
+    stmt = select(User.telegram_id)
+    res = await session.execute(stmt)
+    user_ids = res.scalars().all()
+
+    if not user_ids:
+        await message.answer(f"{emoji_manager.get('warning')} Foydalanuvchilar topilmadi.", parse_mode="HTML")
+        await state.clear()
+        return
+
+    total_users = len(user_ids)
+    sent_count = 0
+    blocked_count = 0
+    failed_count = 0
+
+    status_msg = await message.answer(
+        f"{emoji_manager.get('speaker')} <b>{total_users} ta foydalanuvchiga xabar yuborish boshlandi...</b>",
+        parse_mode="HTML"
+    )
+
+    for uid in user_ids:
+        try:
+            await message.copy_to(chat_id=uid)
+            sent_count += 1
+            await asyncio.sleep(0.04)
+        except Exception as ex:
+            err_str = str(ex).lower()
+            if "blocked" in err_str or "forbidden" in err_str or "deactivated" in err_str:
+                blocked_count += 1
+            else:
+                failed_count += 1
+
+    await state.clear()
+    report_text = (
+        f"{emoji_manager.get('success')} <b>USERLARGA BROADCAST YUBORILDI!</b>\n\n"
+        f"👥 <b>Jami foydalanuvchilar:</b> {total_users} ta\n"
+        f"{emoji_manager.get('success')} <b>Yetib bormadi:</b> {sent_count} ta\n"
+        f"{emoji_manager.get('danger')} <b>Bloklagan/Nofaol:</b> {blocked_count} ta\n"
+        f"{emoji_manager.get('warning')} <b>Boshqa xatolar:</b> {failed_count} ta"
+    )
+    await message.answer(report_text, reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
 
 @router.message(AdminUserVoteAdjustState.waiting_for_user_id, F.text)
 async def process_admin_user_vote_adjust_id(message: Message, state: FSMContext, session: AsyncSession):

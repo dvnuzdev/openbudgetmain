@@ -198,6 +198,20 @@ def get_admin_dashboard_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 make_inline_btn(
+                    text="Userlarga Xabar",
+                    key="speaker",
+                    style="success",
+                    callback_data="admin_menu:user_broadcast"
+                ),
+                make_inline_btn(
+                    text="Guruhlarga Reklama",
+                    key="speaker",
+                    style="success",
+                    callback_data="admin_menu:broadcast"
+                )
+            ],
+            [
+                make_inline_btn(
                     text="Ovoz Narxi (UZS)",
                     key="paid_icon",
                     style="success",
@@ -245,14 +259,6 @@ def get_admin_dashboard_keyboard() -> InlineKeyboardMarkup:
                     style="primary",
                     callback_data="admin_menu:groups"
                 ),
-                make_inline_btn(
-                    text="Guruhlarga Reklama",
-                    key="speaker",
-                    style="success",
-                    callback_data="admin_menu:broadcast"
-                )
-            ],
-            [
                 make_inline_btn(
                     text="Yangilash",
                     key="system_icon",
