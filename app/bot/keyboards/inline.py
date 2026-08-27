@@ -44,6 +44,23 @@ def get_help_contacts_keyboard() -> InlineKeyboardMarkup:
         ]
     )
 
+def get_openbudget_voting_keyboard(project_id: str = None) -> InlineKeyboardMarkup:
+    """Returns inline keyboard linking directly to the OpenBudget initiative page."""
+    target_id = project_id or settings.OPENBUDGET_PROJECT_ID
+    url = f"https://openbudget.uz/boards/initiatives/initiative/{target_id}"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                make_inline_btn(
+                    text="🌐 OpenBudget'da Ovoz Berish",
+                    key="vote",
+                    style="primary",
+                    url=url
+                )
+            ]
+        ]
+    )
+
 def get_payout_choice_keyboard(vote_id: int = None) -> InlineKeyboardMarkup:
     """Returns payout destination selection inline keyboard."""
     return InlineKeyboardMarkup(

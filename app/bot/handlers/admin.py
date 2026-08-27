@@ -364,8 +364,8 @@ async def process_admin_user_broadcast_message(message: Message, state: FSMConte
     report_text = (
         f"{emoji_manager.get('success')} <b>USERLARGA BROADCAST YUBORILDI!</b>\n\n"
         f"👥 <b>Jami foydalanuvchilar:</b> {total_users} ta\n"
-        f"{emoji_manager.get('success')} <b>Yetib bormadi:</b> {sent_count} ta\n"
-        f"{emoji_manager.get('danger')} <b>Bloklagan/Nofaol:</b> {blocked_count} ta\n"
+        f"{emoji_manager.get('success')} <b>Muvaffaqiyatli yetib bordi:</b> {sent_count} ta\n"
+        f"{emoji_manager.get('danger')} <b>Bloklagan / Nofaol:</b> {blocked_count} ta\n"
         f"{emoji_manager.get('warning')} <b>Boshqa xatolar:</b> {failed_count} ta"
     )
     await message.answer(report_text, reply_markup=get_admin_dashboard_keyboard(), parse_mode="HTML")
